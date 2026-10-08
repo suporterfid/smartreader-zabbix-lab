@@ -266,7 +266,8 @@ def build_cap_template(groupid):
          []),
         ("CPU temperature limit", "cap.cpu.temp.max",
          "metricsmonitoringservice_system_cpu_max_allowed_temp___c_", FLOAT, "°C", []),
-        ("CAP CPU share since boot", "cap.cpu.avg", "metricsmonitoringservice_system_cpu_usage____", FLOAT, "%",
+        # CAP 4.0.1.109 reports a since-boot average here; later releases the load over the last 10 s.
+        ("CAP process CPU", "cap.cpu.avg", "metricsmonitoringservice_system_cpu_usage____", FLOAT, "%",
          []),
         ("eth0 received", "cap.net.rx", "metricsmonitoringservice_system_network_rx_bytes", FLOAT, "bps",
          [step(CHANGE_SEC), step(MULT, "8")]),

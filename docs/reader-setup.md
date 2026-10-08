@@ -249,6 +249,6 @@ setting, so the reset may clear it too.
 | "CAP cannot use the reader REST API" | The CAP has an old reader password, or the reader is in LLRP mode | CAP **Admin → Update RShell Password**; `config rfid interface rest` |
 | "Antenna N is down" for an empty port | That port is in the preset but has no antenna | Set `R700_ANTENNAS` (step 6) and re-run `provision.py` |
 | "SNMP agent restarted" after a change | Every SNMP settings change restarts the reader's agent | Expected; it clears after 10 minutes |
-| "CAP MQTT Certificate is red" while MQTT works | CAP 4.0.1.109 flags TLS without a CA and a client certificate | Known CAP issue; upload the broker's CA in the CAP if you have it |
+| "CAP MQTT Certificate is red" (yellow on later CAPs) while MQTT works | No CA certificate in the CAP, so it accepts any broker certificate. CAP 4.0.1.109 also shows red when only the client certificate is missing | Upload the broker's CA certificate in the CAP. A client certificate is only needed for mutual TLS |
 
 `provision.py` rebuilds the host from scratch, so collected history starts over each time you run it.

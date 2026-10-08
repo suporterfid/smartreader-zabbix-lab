@@ -55,7 +55,8 @@ From top to bottom:
 - **Status tiles:** reachability, RFID subsystem, each discovered antenna, inventory state, and whether
   the CAP is connected to its MQTT broker and to the reader's REST API.
 - **CAP components:** one tile per item of the CAP's own status page, coloured OK, Warning, Error or Off.
-  The red *MQTT certificate* tile here is the CAP's one-way TLS false positive described below.
+  The red *MQTT certificate* tile is how CAP 4.0.1.109 reports MQTT over TLS without a CA certificate
+  (see the findings below).
 - **Gauges:** CPU temperature, reader CPU and memory, and the CAP's file system.
 - **Current problems and uptimes.** The yellow problem is a test trap; the reader, CAP and SNMP agent
   uptimes sit on the right. The SNMP agent's is about three hours, against a day for the reader, because the agent restarted
@@ -133,10 +134,18 @@ Checked on an R700 with firmware 10.4.0 and SmartReader CAP 4.0.1.109:
 - **Transmit power is in hundredths of a dBm** (1550 = 15.5 dBm) and energized time in milliseconds.
 - **Empty antenna ports report down (4)** when the active preset includes them. Set `R700_ANTENNAS` to
   the ports that have an antenna, or they raise "antenna down" for good.
-- **The CAP reports `mqtt-cert` red** when MQTT TLS is on without a CA and a client certificate, even
-  for one-way TLS where the connection works. The lab shows that as a problem.
-- **`/metrics` has a side effect:** with the CAP's TCP socket output enabled and clients connected, each
-  request sends every socket client a blank line.
+- **Without a CA certificate the CAP does not verify the MQTT broker.** It accepts any broker
+  certificate, so TLS works but the broker could be anyone. CAP 4.0.1.109 shows this on its status
+  page as `mqtt-cert` red, even while connected, and the lab raises it as a High problem. CAP releases
+  after 4.0.1.109 show it as yellow (a Warning in the lab once it lasts 15 minutes), and a valid CA
+  without a client certificate as green. Upload the broker's CA certificate in the CAP to clear it.
+- **CAP 4.0.1.109's `/metrics` has rough edges**, all fixed in later releases without renaming any
+  metric:
+  - With the TCP socket output enabled and clients connected, each request sends every socket client
+    a blank line.
+  - One failing part replaces the whole response with `# Metrics unavailable`.
+  - The CPU metric is a since-boot average, not current load. Later releases report the last 10 s.
+  - The min/max gauges are constants.
 
 ## Traps and Docker Desktop
 
