@@ -1,0 +1,12 @@
+# Local settings and passwords
+.env
+
+# Vendor MIB files are not redistributed; see mibs/README.md
+mibs/*
+!mibs/README.md
+
+# Raw walks of your own reader (serial numbers, host names)
+snmpwalk-baseline.txt
+
+__pycache__/
+*.pyc
