@@ -1,5 +1,26 @@
 # SmartReader Zabbix Lab
 
+## TL;DR
+
+You need Docker, Python 3.10+, an R700 running the SmartReader CAP, its `root` password and the CAP's
+admin login, and UDP port 162 open on this PC.
+
+```bash
+git clone https://github.com/suporterfid/smartreader-zabbix-lab.git && cd smartreader-zabbix-lab
+pip install -r requirements.txt
+cp .env.example .env            # edit: READER_HOST, READER_PASSWORD, CAP_PASSWORD, LAB_HOST_IP,
+                                #       SNMP_COMMUNITY, SNMP_TRAP_COMMUNITY, R700_ANTENNAS
+docker compose up -d            # Zabbix 7.0 at http://localhost:8080 (Admin / zabbix)
+python reader_snmp.py enable    # reader: SNMP v2c read-only, traps to LAB_HOST_IP
+python provision.py             # Zabbix: templates, triggers, host and dashboard
+python status.py --wait         # first data, traps and open problems
+```
+
+Then open *Dashboards → R700 bench lab*. To put the reader back: `python reader_snmp.py revert`.
+Step-by-step reader preparation, checks and troubleshooting: [docs/reader-setup.md](docs/reader-setup.md).
+
+## About
+
 A Docker Compose lab that runs **Zabbix 7.0 LTS** and monitors an **Impinj R700** RFID reader and the
 **SmartReader CAP** running on it. One script builds the templates, triggers, host and dashboard through
 the Zabbix API, so a fresh lab is ready in a few minutes and can be rebuilt at any time.
@@ -28,6 +49,9 @@ Three templates are created in the *Templates/SmartReader* group: **Impinj R700 
 - UDP port 162 free on this machine and allowed through its firewall, so the reader's traps can arrive.
 
 ## Quick start
+
+New to the reader side? [docs/reader-setup.md](docs/reader-setup.md) walks through preparing an R700
+step by step: passwords, network checks, SNMP and traps, antenna ports, and how to undo it.
 
 ```bash
 cp .env.example .env            # reader address, passwords, this PC's address (LAB_HOST_IP)
@@ -58,6 +82,7 @@ snmpget -v2c -c wrong-community <reader> 1.3.6.1.2.1.1.5.0
 | `reader_snmp.py` | `enable`, `revert` or `show` the reader's SNMP settings through RShell |
 | `status.py` | What Zabbix is collecting: unsupported items, latest values, traps, open problems, inventory |
 | `probe.py` | Read-only look at the reader and the CAP without Zabbix |
+| `docs/reader-setup.md` | Step-by-step tutorial for preparing a reader |
 | `docs/snmpwalk-r700-fw10.4.0.txt` | Sample walk of a reader, serial number and host name removed |
 | `mibs/` | Optional vendor MIBs (not included; see `mibs/README.md`) |
 

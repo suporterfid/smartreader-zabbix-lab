@@ -10,3 +10,6 @@ snmpwalk-baseline.txt
 
 __pycache__/
 *.pyc
+
+# Browser automation scratch output
+.playwright-mcp/
