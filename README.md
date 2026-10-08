@@ -21,6 +21,8 @@ Step-by-step reader preparation, checks and troubleshooting: [docs/reader-setup.
 
 ## About
 
+![Status row of the R700 bench lab dashboard: reader, RFID, antenna, inventory, MQTT and REST tiles, CAP component tiles and four gauges](docs/images/dashboard-status.png)
+
 A Docker Compose lab that runs **Zabbix 7.0 LTS** and monitors an **Impinj R700** RFID reader and the
 **SmartReader CAP** running on it. One script builds the templates, triggers, host and dashboard through
 the Zabbix API, so a fresh lab is ready in a few minutes and can be rebuilt at any time.
@@ -40,6 +42,27 @@ it out, and every item in it has collected data from a real reader (firmware 10.
 Three templates are created in the *Templates/SmartReader* group: **Impinj R700 by SNMP**,
 **SmartReader CAP by HTTP** and **Impinj R700 REST API**. With one antenna attached, the host has about
 80 items and 20 triggers, plus a dashboard named **R700 bench lab**.
+
+## Dashboard
+
+`provision.py` finishes by building the **R700 bench lab** dashboard. This is it on a bench R700
+(firmware 10.4.0, CAP 4.0.1.109) after 30 minutes of collection:
+
+![R700 bench lab dashboard with live data from a bench reader](docs/images/dashboard.png)
+
+From top to bottom:
+
+- **Status tiles:** reachability, RFID subsystem, each discovered antenna, inventory state, and whether
+  the CAP is connected to its MQTT broker and to the reader's REST API.
+- **CAP components:** one tile per item of the CAP's own status page, coloured OK, Warning, Error or Off.
+  The red *MQTT certificate* tile here is the CAP's one-way TLS false positive described below.
+- **Gauges:** CPU temperature, reader CPU and memory, and the CAP's file system.
+- **Current problems and uptimes.** The yellow problem is a test trap; the reader, CAP and SNMP agent
+  uptimes sit on the right. The SNMP agent's is about three hours, against a day for the reader, because the agent restarted
+  when the lab enabled SNMP.
+- **Graphs:** reader CPU and memory, temperatures, `eth0` traffic, CAP memory, ICMP response time and
+  MQTT backlog.
+- **SNMP traps received**, newest first, with the full trap content.
 
 ## Requirements
 
@@ -83,6 +106,7 @@ snmpget -v2c -c wrong-community <reader> 1.3.6.1.2.1.1.5.0
 | `status.py` | What Zabbix is collecting: unsupported items, latest values, traps, open problems, inventory |
 | `probe.py` | Read-only look at the reader and the CAP without Zabbix |
 | `docs/reader-setup.md` | Step-by-step tutorial for preparing a reader |
+| `docs/images/` | Dashboard screenshots used in this README |
 | `docs/snmpwalk-r700-fw10.4.0.txt` | Sample walk of a reader, serial number and host name removed |
 | `mibs/` | Optional vendor MIBs (not included; see `mibs/README.md`) |
 
