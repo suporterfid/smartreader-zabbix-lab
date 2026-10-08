@@ -26,10 +26,10 @@ def run(commands):
     for cmd in commands:
         out = rshell(cmd).strip().splitlines()
         status = out[0] if out else "(no output)"
-        shown = cmd if "community" not in cmd else cmd.rsplit(" ", 1)[0] + " ***"
+        shown = cmd if "community" not in cmd and "passphrase" not in cmd else cmd.rsplit(" ", 1)[0] + " ***"
         print(f"{shown:55} {status}")
         if "Success" not in status:
-            sys.exit(f"stopped: {cmd!r} answered {out}")
+            sys.exit(f"stopped: {shown!r} answered {out}")
 
 
 if __name__ == "__main__":

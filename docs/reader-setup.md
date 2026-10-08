@@ -143,9 +143,7 @@ Some notes on these settings:
 - **The traps are v2c.** That is the only version the R700 sends.
 - **The reader takes up to four trap destinations.** Use `config snmp trap sink2 <host>` and so on.
 
-If you prefer SNMPv3, the R700 supports one read-only user with MD5 authentication and no encryption
-(`config snmp v3 ro …`). The lab's host is set up for v2c, so change its SNMP interface in Zabbix to
-SNMPv3 *authNoPriv* if you go that way.
+The lab is built and tested for SNMP v2c only.
 
 ## 5. Label the reader (optional)
 
@@ -235,7 +233,7 @@ python reader_snmp.py show
 ```
 
 The passwords from step 2 and the location from step 5 stay as they are. The device role is an SNMP
-setting, so the reset may clear it too.
+setting: the reset sets it to `default role`.
 
 ## Troubleshooting
 
