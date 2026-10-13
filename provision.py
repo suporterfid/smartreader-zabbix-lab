@@ -484,6 +484,60 @@ def build_sr3_template(groupid):
         snmp(f"{name} per second", key, f"{root}.3.{index}.0", FLOAT, units="rps",
              preprocessing=[step(CHANGE_SEC)])
 
+    # RFID statistics: what the CAP's status collector reads with RShell `show rfid stat`, refreshed every 60 s.
+    rfid_status = call("valuemap.create", {"hostid": tid, "name": "SmartReader RFID status", "mappings": [
+        {"value": "1", "newvalue": "enabled"}, {"value": "2", "newvalue": "disabled"},
+        {"value": "3", "newvalue": "other"}]})["valuemapids"][0]
+    yes_no = call("valuemap.create", {"hostid": tid, "name": "SmartReader yes/no", "mappings": [
+        {"value": "1", "newvalue": "yes"}, {"value": "2", "newvalue": "no"}]})["valuemapids"][0]
+    collection = call("valuemap.create", {"hostid": tid, "name": "SmartReader collection status", "mappings": [
+        {"value": "0", "newvalue": "not collected yet"}, {"value": "1", "newvalue": "ok"},
+        {"value": "2", "newvalue": "timeout"}, {"value": "3", "newvalue": "paused: the reader rejects the CAP's credentials"},
+        {"value": "4", "newvalue": "error"}]})["valuemapids"][0]
+    snmp("Reader administrative status", "sr3.reader.admin", f"{root}.5.2.1.0", UINT, valuemapid=rfid_status)
+    snmp("Reader operational status", "sr3.reader.oper", f"{root}.5.2.2.0", UINT, valuemapid=rfid_status)
+    snmp("RFID statistics since last reset", "sr3.rfid.reset", f"{root}.5.2.3.0", FLOAT, units="uptime")
+    snmp("RFID statistics age", "sr3.rfid.age", f"{root}.5.3.1.0", FLOAT, units="s")
+    snmp("RFID statistics collection", "sr3.rfid.collection", f"{root}.5.3.2.0", UINT, valuemapid=collection)
+
+    # Antenna table: one row per port, `show rfid stat` figures plus SmartReader's own antenna settings.
+    walk_key = "sr3.antennas.walk"
+    snmp("Antenna table (walk)", walk_key, f"walk[{root}.5.1.1]", TEXT, history="1h")
+    rule = call("discoveryrule.create", {
+        "hostid": tid, "name": "SmartReader antenna discovery", "key_": "sr3.antenna.discovery", "type": DEPENDENT,
+        "master_itemid": b.items[walk_key], "delay": "0", "lifetime": "1d",
+        "preprocessing": [step(WALK_JSON, f"{{#ZONE}}\n{root}.5.1.1.21\n0\n{{#CONFIGURED}}\n{root}.5.1.1.20\n0")],
+    })["itemids"][0]
+
+    def antenna(name, field, column, vtype, units="", extra=(), **kw):
+        params = {"ruleid": rule, "hostid": tid, "name": f"Antenna {{#SNMPINDEX}} ({{#ZONE}}): {name}",
+                  "key_": f"sr3.antenna.{field}[{{#SNMPINDEX}}]", "type": DEPENDENT, "delay": "0",
+                  "value_type": vtype, "master_itemid": b.items[walk_key], "units": units,
+                  "preprocessing": [step(WALK_VALUE, f"{root}.5.1.1.{column}.{{#SNMPINDEX}}\n0"), *extra],
+                  "tags": tags(component="smartreader-antenna", antenna="{#SNMPINDEX}")}
+        params.update(kw)
+        return call("itemprototype.create", params)["itemids"][0]
+
+    antenna("administrative status", "admin", 2, UINT, valuemapid=rfid_status)
+    antenna("operational status", "oper", 3, UINT, valuemapid=rfid_status)
+    antenna("last power level", "power", 4, FLOAT, "dBm", [step(MULT, "0.01")])
+    antenna("last noise level", "noise", 5, FLOAT)
+    antenna("time energized", "energized", 6, FLOAT, "uptime", [step(MULT, "0.001")])
+    antenna("unique tags inventoried", "unique", 7, UINT)
+    antenna("tags inventoried", "inventory", 8, UINT)
+    antenna("tags inventoried per second", "inventory.rate", 8, FLOAT, "tags/s", [step(CHANGE_SEC)])
+    for name, field, column in (("failed inventories", "inventory.failed", 9), ("tag reads", "reads", 10),
+                                ("failed tag reads", "reads.failed", 11), ("tag writes", "writes", 12),
+                                ("failed tag writes", "writes.failed", 13), ("tag locks", "locks", 14),
+                                ("failed tag locks", "locks.failed", 15), ("tag kills", "kills", 16),
+                                ("failed tag kills", "kills.failed", 17), ("tag erases", "erases", 18),
+                                ("failed tag erases", "erases.failed", 19)):
+        antenna(name, field, column, UINT)
+    antenna("enabled in SmartReader", "enabled", 20, UINT, valuemapid=yes_no)
+    antenna("zone", "zone", 21, CHAR)
+    antenna("configured transmit power", "txpower", 22, FLOAT, "dBm", [step(MULT, "0.01")])
+    antenna("configured receive sensitivity", "rxsensitivity", 23, FLOAT, "dBm")
+
     b.item("Trap: SmartReader SNMPv3 notification", SR3_TRAP_KEY, TRAP, LOG, tags=tags(component="traps"))
 
     down = trigger("SmartReader SNMPv3 agent not answering", f"nodata(/{T}/sr3.agent.uptime,5m)=1", AVERAGE)
@@ -504,6 +558,16 @@ def build_sr3_template(groupid):
     trigger("SNMPv3 requests with a wrong key against SmartReader",
             f"max(/{T}/sr3.wrong.digests,5m)>0 or max(/{T}/sr3.decryption.errors,5m)>0", WARNING,
             dependencies=dep, comments="Someone is trying the agent with a wrong key; check who can reach UDP 1161.")
+    trigger("Reader RFID not operational (SNMPv3)", f"last(/{T}/sr3.reader.oper)<>1", HIGH, dependencies=dep)
+    trigger("SmartReader RFID statistics older than 5 minutes", f"last(/{T}/sr3.rfid.age)>300", WARNING,
+            dependencies=dep, comments="The CAP collects them every 60 s; see the collection status item for why.")
+    trigger("SmartReader cannot collect RFID statistics", f'count(/{T}/sr3.rfid.collection,10m,"eq","1")=0',
+            WARNING, dependencies=dep)
+    call("triggerprototype.create", {
+        "description": "Antenna {#SNMPINDEX} ({#ZONE}) is enabled in SmartReader but not operational",
+        "expression": f"last(/{T}/sr3.antenna.oper[{{#SNMPINDEX}}])<>1"
+                      f" and last(/{T}/sr3.antenna.enabled[{{#SNMPINDEX}}])=1",
+        "priority": AVERAGE, "opdata": "{ITEM.LASTVALUE1}"})
     trigger("SmartReader SNMPv3 notification received", f"nodata(/{T}/{SR3_TRAP_KEY},15m)=0", INFO,
             manual_close=1, comments="Raised for 15 minutes after an inform arrives; close it manually once handled.")
     return tid

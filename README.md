@@ -38,7 +38,7 @@ it out, and every item in it has collected data from a real reader (firmware 10.
 | Reader | SNMP traps | Unexpected restart, authentication failure, planned shutdown, SNMP agent restart, anything else via a fallback item |
 | SmartReader CAP | HTTPS 8443 | `/metrics` (MQTT connection and backlog, CAP and OS uptime, memory, disk, CPU temperature, `eth0` traffic), `/api/status/overview` (each dashboard component, discovered), `/api/getstatus` (inventory running or stopped), `/api/reader-rest-health` |
 | Reader | REST API | Current CPU and memory utilization, temperature, uptime, firmware version, installed CAP image |
-| SmartReader CAP | SNMPv3, **experimental and opt-in** | CAP health from SmartReader's own SNMPv3 agent (authPriv, UDP 1161) and its SNMPv3 informs. No released CAP has the agent yet; a simulator stands in. See [docs/smartreader-snmpv3.md](docs/smartreader-snmpv3.md) |
+| SmartReader CAP | SNMPv3, **experimental and opt-in** | CAP health from SmartReader's own SNMPv3 agent (authPriv, UDP 1161), the reader's RFID statistics with one set of items per antenna port (low-level discovery), and its SNMPv3 informs. No released CAP has the agent yet; a simulator stands in. See [docs/smartreader-snmpv3.md](docs/smartreader-snmpv3.md) |
 
 Three templates are created in the *Templates/SmartReader* group: **Impinj R700 by SNMP**,
 **SmartReader CAP by HTTP** and **Impinj R700 REST API**. With one antenna attached, the host has about
@@ -159,7 +159,8 @@ Checked on an R700 with firmware 10.4.0 and SmartReader CAP 4.0.1.109:
 ## SNMPv3 from SmartReader (experimental)
 
 SmartReader is getting its own SNMPv3 agent, inside the CAP on UDP 1161. It offers authPriv (SHA-2 and AES),
-answers read-only, and sends SNMPv3 informs. With it, Zabbix can watch the CAP with a read-only SNMPv3 user
+answers read-only, and sends SNMPv3 informs. Besides the CAP's health it serves the reader's `show rfid stat`
+figures as an antenna table, one row per port. With it, Zabbix can watch the CAP with a read-only SNMPv3 user
 instead of the CAP admin and reader root passwords the HTTP and REST templates need. **No released CAP ships
 the agent yet**, and its objects sit under a provisional root, so this part of the lab is opt-in:
 

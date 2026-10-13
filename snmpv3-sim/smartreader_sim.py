@@ -62,6 +62,40 @@ def table():
     for row in range(1, 26):
         objects[f"{ROOT}.4.1.1.{row}"] = ("integer", row)
         objects[f"{ROOT}.4.1.2.{row}"] = ("string", f"row-{row}")
+    objects.update(rfid(t))
+    return objects
+
+
+# Antenna table, like the agent's: .5.1.1.<column>.<port>. Port 1 has an antenna and reads tags; ports 2-4 are
+# in the preset without one, so the reader reports them disabled. Statuses: 1 enabled, 2 disabled, 3 other.
+ANTENNA_COUNTERS = ("LastPowerLevel", "LastNoiseLevel", "EnergizedTime", "UniqueInventoryCount",
+                    "TotalInventoryCount", "FailedInventoryCount", "ReadCount", "FailedReadCount", "WriteCount",
+                    "FailedWriteCount", "LockCount", "FailedLockCount", "KillCount", "FailedKillCount",
+                    "EraseCount", "FailedEraseCount")
+
+
+def rfid(t):
+    objects = {}
+    for port in range(1, 5):
+        live = port == 1
+        counters = {name: 0 for name in ANTENNA_COUNTERS}
+        if live:
+            counters.update(LastPowerLevel=1550, EnergizedTime=int(t * 1000 * 0.98), UniqueInventoryCount=4,
+                            TotalInventoryCount=int(t * 245))
+        cells = {1: ("integer", port), 2: ("integer", 1), 3: ("integer", 1 if live else 2)}
+        for column, name in enumerate(ANTENNA_COUNTERS, start=4):
+            kind = "integer" if name in ("LastPowerLevel", "LastNoiseLevel") else (
+                "gauge" if name == "UniqueInventoryCount" else "counter64")
+            cells[column] = (kind, counters[name])
+        cells.update({20: ("integer", 1 if live else 2), 21: ("string", "Dock door 1" if live else "Unused"),
+                      22: ("integer", 1550), 23: ("integer", -92)})
+        for column, cell in cells.items():
+            objects[f"{ROOT}.5.1.1.{column}.{port}"] = cell
+    objects[f"{ROOT}.5.2.1.0"] = ("integer", 1)              # reader administrative status
+    objects[f"{ROOT}.5.2.2.0"] = ("integer", 1)              # reader operational status
+    objects[f"{ROOT}.5.2.3.0"] = ("gauge", int(t))           # seconds since the statistics were reset
+    objects[f"{ROOT}.5.3.1.0"] = ("gauge", int(t) % 60)      # age of the RFID statistics, s (collected every 60 s)
+    objects[f"{ROOT}.5.3.2.0"] = ("integer", 1)              # last collection: ok
     return objects
 
 

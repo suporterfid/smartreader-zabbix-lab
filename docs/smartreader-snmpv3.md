@@ -15,14 +15,14 @@
 |---|---|
 | Where | Inside the SmartReader CAP on the reader, **UDP 1161** (the reader's own agent keeps UDP 161) |
 | Security | SNMPv3 **authPriv** only (SHA-2 and AES); read-only, every SET is refused |
-| Data | CAP health the CAP already collects: CPU, memory, disk, CPU temperature, reader and CAP uptime, MQTT connection and backlog, process memory, CPU and threads, the agent's own request counters |
+| Data | CAP health the CAP already collects: CPU, memory, disk, CPU temperature, reader and CAP uptime, MQTT connection and backlog, process memory, CPU and threads, the agent's own request counters. Also the reader's RFID statistics: its RFID status, and an antenna table with each port's `show rfid stat` figures and SmartReader's settings for it |
 | Notifications | SNMPv3 **INFORMs** to the lab's trap receiver, acknowledged by it |
 | What Zabbix no longer needs | The CAP admin password and the reader root password: the HTTP and REST templates use them, this one uses a read-only SNMPv3 user |
 
 The lab adds three things, all off unless `.env` turns them on:
 
-- **A template, *SmartReader CAP by SNMPv3 (experimental)*,** with 26 items, a trap item for SmartReader's
-  informs and 10 triggers. Every SmartReader OID is written relative to the macro `{$SR.SNMP.ROOT}`, so the
+- **A template, *SmartReader CAP by SNMPv3 (experimental)*,** with 32 items, an antenna discovery rule (23
+  item prototypes and a trigger prototype per port), a trap item for SmartReader's informs and 13 triggers. Every SmartReader OID is written relative to the macro `{$SR.SNMP.ROOT}`, so the
   final root needs one macro change, not a new template.
 - **A third interface on the reader's host.** It uses SNMPv3 on `READER_HOST:1161`, next to the v2c interface
   on port 161 and the trap-only interface.
@@ -78,7 +78,7 @@ No reader is involved. You need the lab running ([README](../README.md), quick s
    python status.py --host smartreader-snmpv3-sim --wait
    ```
 
-   Expect about 27 items, none unsupported, and the interface `172.31.67.20` available. In the web UI the
+   Expect 33 items plus 92 discovered antenna items, none unsupported, and the interface `172.31.67.20` available. In the web UI the
    host is *SmartReader SNMPv3 simulator*.
 
 4. Send an INFORM and watch it arrive:
@@ -138,87 +138,142 @@ No reader is involved. You need the lab running ([README](../README.md), quick s
 port 1161. The template is also published for import: [templates/zbx_smartreader_cap_snmpv3.yaml](../templates/zbx_smartreader_cap_snmpv3.yaml)
 (see [Import the template](#import-the-template)).
 
+| Subtree | Holds |
+|---|---|
+| `{ROOT}.2` | CAP health |
+| `{ROOT}.3` | The agent's counters |
+| `{ROOT}.4` | A synthetic 25-row table the test build carries to size walks; not polled |
+| `{ROOT}.5.1` | **Antenna table**, one row per port: `show rfid stat` figures and SmartReader's antenna settings |
+| `{ROOT}.5.2` | The reader's RFID status and when its statistics were reset |
+| `{ROOT}.5.3` | Age and outcome of the latest RFID statistics collection |
+
+The RFID values come from the CAP's reader-status collector, which reads RShell `show rfid stat` every 60 s
+while the agent runs. An SNMP request reads the collector's latest snapshot and never makes the CAP talk
+to the reader.
+
 ### Item keys and values read in the tests
 
-All 27 keys of the template, each read over SNMPv3 on 2026-10-13 16:25:16 UTC:
+Every key was read over SNMPv3 in one run, on 2026-10-13 18:32:53 UTC:
 
 - **R700:** the bench reader (R700 Rev1, firmware 10.4.0) running the SmartReader SNMPv3 test build
-  (engine boots 7). MQTT was switched off on that test CAP, hence `mqtt.connected` 0.
-- **Simulator:** `smartreader-snmpv3-sim`; synthetic values.
+  (engine boots 3).
+- **Simulator:** `smartreader-snmpv3-sim`, with synthetic values.
 
-Each row has the key and its OID. `snmp_type` and `agent_value_is` say what the agent answers. The
-`*_snmp` columns hold the raw answer from Net-SNMP 5.9 (authPriv SHA-256 / AES-128). The `*_zabbix` columns
-hold the value Zabbix 7.0.31 stored after `zabbix_preprocessing`, in `zabbix_units`. The two come from
-reads a few seconds apart, so a moving value such as CPU differs between them: on the reader, raw `1289` is
-12.89 % while Zabbix had stored 11.23 % from its own poll. The reader's `sysDescr` ends in a build label,
-elided as `(…)`.
+`snmp_type` and `agent_value_is` say what the agent answers. The `*_snmp` columns hold the raw answer from
+Net-SNMP 5.9 (authPriv SHA-256 / AES-128). The `*_zabbix` columns hold the value Zabbix 7.0.31 stored after
+`zabbix_preprocessing`, in `zabbix_units`. The two come from reads a few seconds apart, so values that move,
+such as CPU or tag counts, differ between them. The reader's `sysDescr` ends in a build label, shown as `(…)`.
+
+**Items** — 33 keys: the CAP's health, the agent, the RFID status, the antenna table's walk and the trap item.
 
 ```csv
 key,item,oid,snmp_type,agent_value_is,zabbix_preprocessing,zabbix_units,r700_snmp,r700_zabbix,simulator_snmp,simulator_zabbix
-sr3.agent.uptime,SNMPv3 agent uptime,1.3.6.1.2.1.1.3.0,Timeticks,hundredths of a second,multiply by 0.01,uptime,(122745) 0:20:27.45,1208.93,(118420) 0:19:44.20,1161.51
-sr3.sysdescr,SNMPv3 agent description,1.3.6.1.2.1.1.1.0,STRING,,,,SmartReader CAP 4.0.1.200 on R700 (…),SmartReader CAP 4.0.1.200 on R700 (…),"SmartReader SNMPv3 simulator (lab, synthetic values)","SmartReader SNMPv3 simulator (lab, synthetic values)"
+sr3.agent.uptime,SNMPv3 agent uptime,1.3.6.1.2.1.1.3.0,Timeticks,hundredths of a second,multiply by 0.01,uptime,(131549) 0:21:55.49,1243.19,(104897) 0:17:28.97,975.63
+sr3.sysdescr,SNMPv3 agent description,1.3.6.1.2.1.1.1.0,STRING,,,,SmartReader CAP 4.0.1.201 on R700 (…),SmartReader CAP 4.0.1.201 on R700 (…),"SmartReader SNMPv3 simulator (lab, synthetic values)","SmartReader SNMPv3 simulator (lab, synthetic values)"
 sr3.sysobjectid,SNMPv3 agent object ID,1.3.6.1.2.1.1.2.0,OID,,,,.1.3.6.1.4.1.8072.9999.9999.7.1,NET-SNMP-MIB::netSnmpPlaypen.7.1,.1.3.6.1.4.1.8072.9999.9999.7.1,NET-SNMP-MIB::netSnmpPlaypen.7.1
-sr3.engine.id,SNMPv3 engine ID,1.3.6.1.6.3.10.2.1.1.0,Hex-STRING,,,,80 00 65 1A 05 4C B3 D1 76 1C D7 3E 86,80 00 65 1A 05 4C B3 D1 76 1C D7 3E 86,80 00 1F 88 80 6E 3E 6C 40 D4 56 CE 6A 00 00 00 00,80 00 1F 88 80 6E 3E 6C 40 D4 56 CE 6A 00 00 00 00
-sr3.engine.boots,SNMPv3 engine boots,1.3.6.1.6.3.10.2.1.2.0,INTEGER,,,,7,7,1,1
-sr3.cpu,CAP process CPU,{ROOT}.2.1.0,Gauge32,percent x 100,multiply by 0.01,%,1289,11.23,3001,26.18
-sr3.memory,CAP process memory,{ROOT}.2.2.0,Gauge32,MB,multiply by 1048576,B,190,201326592,180,187695104
+sr3.engine.id,SNMPv3 engine ID,1.3.6.1.6.3.10.2.1.1.0,Hex-STRING,,,,80 00 65 1A 05 E3 EF CA 5F 21 07 4D 3E,80 00 65 1A 05 E3 EF CA 5F 21 07 4D 3E,80 00 1F 88 80 6D DE F3 4F 5D 75 CE 6A 00 00 00 00,80 00 1F 88 80 6D DE F3 4F 5D 75 CE 6A 00 00 00 00
+sr3.engine.boots,SNMPv3 engine boots,1.3.6.1.6.3.10.2.1.2.0,INTEGER,,,,3,3,1,1
+sr3.cpu,CAP process CPU,{ROOT}.2.1.0,Gauge32,percent x 100,multiply by 0.01,%,1333,20.06,3621,38.48
+sr3.memory,CAP process memory,{ROOT}.2.2.0,Gauge32,MB,multiply by 1048576,B,190,199229440,176,185597952
 sr3.disk.pused,CAP file system used,{ROOT}.2.3.0,Gauge32,percent x 100,multiply by 0.01,%,4395,43.95,2835,28.35
-sr3.os.uptime,Reader OS uptime,{ROOT}.2.4.0,Gauge32,seconds,,uptime,1325,1305,49808,49785
-sr3.app.uptime,CAP application uptime,{ROOT}.2.5.0,Gauge32,seconds,,uptime,1223,1203,743,720
-sr3.cpu.temp,CPU temperature,{ROOT}.2.6.0,Gauge32,degrees C x 10,multiply by 0.1,°C,486,48.7,538,54
+sr3.os.uptime,Reader OS uptime,{ROOT}.2.4.0,Gauge32,seconds,,uptime,1413,1343,78849,78775
+sr3.app.uptime,CAP application uptime,{ROOT}.2.5.0,Gauge32,seconds,,uptime,1314,1244,533,460
+sr3.cpu.temp,CPU temperature,{ROOT}.2.6.0,Gauge32,degrees C x 10,multiply by 0.1,°C,489,48.8,549,55
 sr3.cpu.temp.max,CPU temperature limit,{ROOT}.2.7.0,Gauge32,degrees C x 10,multiply by 0.1,°C,800,80,1050,105
-sr3.cpu.temp.peak,CPU temperature peak,{ROOT}.2.8.0,Gauge32,degrees C x 10,multiply by 0.1,°C,488,48.8,554,55.4
-sr3.mqtt.connected,CAP connected to MQTT broker,{ROOT}.2.9.0,Gauge32,0 or 1,,,0,0,1,1
-sr3.mqtt.pending,CAP MQTT messages pending,{ROOT}.2.10.0,Gauge32,messages,,,0,0,1,2
-sr3.process.rss,CAP resident memory,{ROOT}.2.20.0,Gauge32,bytes,,B,200237056,200237056,202428830,202990429
-sr3.process.cpu,"CAP CPU, % of one core",{ROOT}.2.21.0,Counter64,CPU milliseconds since start,"change per second, then multiply by 0.1",%,445370,28.4402,208238,28.0014
-sr3.process.heap,CAP managed heap,{ROOT}.2.22.0,Gauge32,bytes,,B,50456660,43069572,87281808,98089422
-sr3.process.threads,CAP threads,{ROOT}.2.23.0,Gauge32,threads,,,26,27,27,27
-sr3.requests,SNMPv3 requests per second,{ROOT}.3.1.0,Counter32,,change per second,rps,751,0.9448,371,0.4978
+sr3.cpu.temp.peak,CPU temperature peak,{ROOT}.2.8.0,Gauge32,degrees C x 10,multiply by 0.1,°C,489,48.9,554,55.4
+sr3.mqtt.connected,CAP connected to MQTT broker,{ROOT}.2.9.0,Gauge32,0 or 1,,,1,1,1,1
+sr3.mqtt.pending,CAP MQTT messages pending,{ROOT}.2.10.0,Gauge32,messages,,,90,87,3,1
+sr3.process.rss,CAP resident memory,{ROOT}.2.20.0,Gauge32,bytes,,B,198905856,199790592,202438635,202841554
+sr3.process.cpu,"CAP CPU, % of one core",{ROOT}.2.21.0,Counter64,CPU milliseconds since start,"change per second, then multiply by 0.1",%,565179,43.1846,149579,27.9992
+sr3.process.heap,CAP managed heap,{ROOT}.2.22.0,Gauge32,bytes,,B,53655352,59114604,92824169,88508667
+sr3.process.threads,CAP threads,{ROOT}.2.23.0,Gauge32,threads,,,26,29,27,27
+sr3.requests,SNMPv3 requests per second,{ROOT}.3.1.0,Counter32,,change per second,rps,1132,0.6705,267,0.5079
 sr3.unknown.users,SNMPv3 unknown user names per second,{ROOT}.3.4.0,Counter32,,change per second,rps,0,0,0,0
 sr3.wrong.digests,SNMPv3 wrong digests (authentication failures) per second,{ROOT}.3.6.0,Counter32,,change per second,rps,0,0,0,0
 sr3.decryption.errors,SNMPv3 decryption errors per second,{ROOT}.3.7.0,Counter32,,change per second,rps,0,0,0,0
-sr3.time.window,SNMPv3 requests outside the time window per second,{ROOT}.3.8.0,Counter32,,change per second,rps,5,0,0,0
+sr3.time.window,SNMPv3 requests outside the time window per second,{ROOT}.3.8.0,Counter32,,change per second,rps,0,0,0,0
 sr3.rate.limited,SNMPv3 requests dropped by the rate limit per second,{ROOT}.3.11.0,Counter32,,change per second,rps,0,0,0,0
 sr3.set.refused,SNMPv3 SET requests refused per second,{ROOT}.3.12.0,Counter32,,change per second,rps,0,0,0,0
+sr3.reader.admin,Reader administrative status,{ROOT}.5.2.1.0,INTEGER,"1 enabled, 2 disabled, 3 other",,,1,1,1,1
+sr3.reader.oper,Reader operational status,{ROOT}.5.2.2.0,INTEGER,"1 enabled, 2 disabled, 3 other",,,1,1,1,1
+sr3.rfid.reset,RFID statistics since last reset,{ROOT}.5.2.3.0,Gauge32,seconds since the statistics were reset,,uptime,1298,1230,535,460
+sr3.rfid.age,RFID statistics age,{ROOT}.5.3.1.0,Gauge32,seconds since collected,,s,46,41,54,40
+sr3.rfid.collection,RFID statistics collection,{ROOT}.5.3.2.0,INTEGER,"0 not collected, 1 ok, 2 timeout, 3 paused, 4 error",,,1,1,1,1
+sr3.antennas.walk,Antenna table (walk),walk[{ROOT}.5.1.1],walk,the antenna table,,,92 objects (below),text; feeds the antenna discovery,92 objects,text; feeds the antenna discovery
 "snmptrap[""netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.""]",Trap: SmartReader SNMPv3 notification,{ROOT}.0.* (INFORM),SNMPv3 INFORM,notification,,,snmpTrapOID.0 = NET-SNMP-MIB::netSnmpPlaypen.7.0.1,trap text (below),snmpTrapOID.0 = NET-SNMP-MIB::netSnmpPlaypen.7.0.1,trap text (below)
 ```
 
-Every key was collected on both hosts: 26 SNMP items with a value and none unsupported, plus the trap item
-with an INFORM from each side.
+**Antenna table** — low-level discovery turns each row of `{ROOT}.5.1.1` into 23 items. `{N}` is the
+port, which becomes `{#SNMPINDEX}` in the item keys. `source` is the `show rfid stat` key, or the
+SmartReader setting the column comes from. The examples are port 1, the port with an antenna on both agents.
+
+```csv
+column,oid,source,snmp_type,agent_value_is,zabbix_key,zabbix_preprocessing,zabbix_units,r700_port1_snmp,r700_port1_zabbix,simulator_port1_snmp,simulator_port1_zabbix
+1,{ROOT}.5.1.1.1.{N},antenna port,Integer32,port number,{#SNMPINDEX},,,1,(index),1,(index)
+2,{ROOT}.5.1.1.2.{N},Antenna{N}AdministrativeStatus,INTEGER,"1 enabled, 2 disabled, 3 other",sr3.antenna.admin[{#SNMPINDEX}],,,1,1,1,1
+3,{ROOT}.5.1.1.3.{N},Antenna{N}OperationalStatus,INTEGER,"1 enabled, 2 disabled, 3 other",sr3.antenna.oper[{#SNMPINDEX}],,,1,1,1,1
+4,{ROOT}.5.1.1.4.{N},Antenna{N}LastPowerLevel,Integer32,cdBm,sr3.antenna.power[{#SNMPINDEX}],multiply by 0.01,dBm,1550,15.5,1550,15.5
+5,{ROOT}.5.1.1.5.{N},Antenna{N}LastNoiseLevel,Integer32,as the reader reports it,sr3.antenna.noise[{#SNMPINDEX}],,,0,0,0,0
+6,{ROOT}.5.1.1.6.{N},Antenna{N}EnergizedTime,Counter64,milliseconds,sr3.antenna.energized[{#SNMPINDEX}],multiply by 0.001,uptime,628431,594.115,503558,470.328
+7,{ROOT}.5.1.1.7.{N},Antenna{N}UniqueInventoryCount,Gauge32,tags,sr3.antenna.unique[{#SNMPINDEX}],,,4,4,4,4
+8,{ROOT}.5.1.1.8.{N},Antenna{N}TotalInventoryCount,Counter64,tag inventories,sr3.antenna.inventory[{#SNMPINDEX}],,,165063,156047,125890,117583
+8,{ROOT}.5.1.1.8.{N},Antenna{N}TotalInventoryCount,Counter64,tag inventories,sr3.antenna.inventory.rate[{#SNMPINDEX}],change per second,tags/s,165063,173.5768,125890,245.0037
+9,{ROOT}.5.1.1.9.{N},Antenna{N}FailedInventoryCount,Counter64,count,sr3.antenna.inventory.failed[{#SNMPINDEX}],,,0,0,0,0
+10,{ROOT}.5.1.1.10.{N},Antenna{N}ReadCount,Counter64,count,sr3.antenna.reads[{#SNMPINDEX}],,,0,0,0,0
+11,{ROOT}.5.1.1.11.{N},Antenna{N}FailedReadCount,Counter64,count,sr3.antenna.reads.failed[{#SNMPINDEX}],,,0,0,0,0
+12,{ROOT}.5.1.1.12.{N},Antenna{N}WriteCount,Counter64,count,sr3.antenna.writes[{#SNMPINDEX}],,,0,0,0,0
+13,{ROOT}.5.1.1.13.{N},Antenna{N}FailedWriteCount,Counter64,count,sr3.antenna.writes.failed[{#SNMPINDEX}],,,0,0,0,0
+14,{ROOT}.5.1.1.14.{N},Antenna{N}LockCount,Counter64,count,sr3.antenna.locks[{#SNMPINDEX}],,,0,0,0,0
+15,{ROOT}.5.1.1.15.{N},Antenna{N}FailedLockCount,Counter64,count,sr3.antenna.locks.failed[{#SNMPINDEX}],,,0,0,0,0
+16,{ROOT}.5.1.1.16.{N},Antenna{N}KillCount,Counter64,count,sr3.antenna.kills[{#SNMPINDEX}],,,0,0,0,0
+17,{ROOT}.5.1.1.17.{N},Antenna{N}FailedKillCount,Counter64,count,sr3.antenna.kills.failed[{#SNMPINDEX}],,,0,0,0,0
+18,{ROOT}.5.1.1.18.{N},Antenna{N}EraseCount,Counter64,count,sr3.antenna.erases[{#SNMPINDEX}],,,0,0,0,0
+19,{ROOT}.5.1.1.19.{N},Antenna{N}FailedEraseCount,Counter64,count,sr3.antenna.erases.failed[{#SNMPINDEX}],,,0,0,0,0
+20,{ROOT}.5.1.1.20.{N},antennaStates (SmartReader setting),INTEGER,"1 yes, 2 no",sr3.antenna.enabled[{#SNMPINDEX}],,,1,1,1,1
+21,{ROOT}.5.1.1.21.{N},antennaZones (SmartReader setting),OCTET STRING,zone name,sr3.antenna.zone[{#SNMPINDEX}],,,Cabinet,Cabinet,Dock door 1,Dock door 1
+22,{ROOT}.5.1.1.22.{N},transmitPower (SmartReader setting),Integer32,cdBm,sr3.antenna.txpower[{#SNMPINDEX}],multiply by 0.01,dBm,1550,15.5,1550,15.5
+23,{ROOT}.5.1.1.23.{N},receiveSensitivity (SmartReader setting),Integer32,dBm,sr3.antenna.rxsensitivity[{#SNMPINDEX}],,dBm,-80,-80,-92,-92
+```
+
+Every key was collected on both hosts: 32 SNMP items and 92 discovered antenna items (23 for each of
+4 ports) with a value and none unsupported, plus the trap item with an INFORM from each side.
+
+On the bench reader all four ports are enabled in SmartReader's settings (column 20 is 1 on every port), but
+only port 1 has an antenna, so the reader reports port 1 as enabled and ports 2 to 4 as disabled (column 3 is
+1, 2, 2, 2). The antenna trigger therefore opens for ports 2 to 4 there: that mismatch between the settings
+and the hardware is what it is for. On the simulator only port 1 is enabled, and the trigger stays quiet.
 
 ### Raw SNMP answers
 
-A walk of `{ROOT}` on each agent at the same time, with Net-SNMP 5.9 over authPriv from the lab's network.
-Values under `{ROOT}.2` are scaled integers (see `agent_value_is` above): `{ROOT}.2.1.0` is percent × 100
-and `{ROOT}.2.6.0` is °C × 10. `{ROOT}.4` is a synthetic 25-row table the test build carries to size
-walks; the template does not poll it.
+A walk of `{ROOT}` on each agent in the same run, with Net-SNMP 5.9 over authPriv from the lab's network.
+Values under `{ROOT}.2` are scaled integers (see `agent_value_is`): `{ROOT}.2.1.0` is percent × 100 and
+`{ROOT}.2.6.0` is °C × 10.
 
 R700, `{ROOT}.2` (health) and `{ROOT}.3` (agent counters since the CAP started):
 
 ```text
-.1.3.6.1.4.1.8072.9999.9999.7.2.1.0 = Gauge32: 1289
-.1.3.6.1.4.1.8072.9999.9999.7.2.2.0 = Gauge32: 190
+.1.3.6.1.4.1.8072.9999.9999.7.2.1.0 = Gauge32: 1482
+.1.3.6.1.4.1.8072.9999.9999.7.2.2.0 = Gauge32: 192
 .1.3.6.1.4.1.8072.9999.9999.7.2.3.0 = Gauge32: 4395
-.1.3.6.1.4.1.8072.9999.9999.7.2.4.0 = Gauge32: 1325
-.1.3.6.1.4.1.8072.9999.9999.7.2.5.0 = Gauge32: 1223
-.1.3.6.1.4.1.8072.9999.9999.7.2.6.0 = Gauge32: 486
+.1.3.6.1.4.1.8072.9999.9999.7.2.4.0 = Gauge32: 1383
+.1.3.6.1.4.1.8072.9999.9999.7.2.5.0 = Gauge32: 1284
+.1.3.6.1.4.1.8072.9999.9999.7.2.6.0 = Gauge32: 489
 .1.3.6.1.4.1.8072.9999.9999.7.2.7.0 = Gauge32: 800
-.1.3.6.1.4.1.8072.9999.9999.7.2.8.0 = Gauge32: 488
-.1.3.6.1.4.1.8072.9999.9999.7.2.9.0 = Gauge32: 0
-.1.3.6.1.4.1.8072.9999.9999.7.2.10.0 = Gauge32: 0
-.1.3.6.1.4.1.8072.9999.9999.7.2.20.0 = Gauge32: 200237056
-.1.3.6.1.4.1.8072.9999.9999.7.2.21.0 = Counter64: 445710
-.1.3.6.1.4.1.8072.9999.9999.7.2.22.0 = Gauge32: 51653360
-.1.3.6.1.4.1.8072.9999.9999.7.2.23.0 = Gauge32: 27
-.1.3.6.1.4.1.8072.9999.9999.7.3.1.0 = Counter32: 769
-.1.3.6.1.4.1.8072.9999.9999.7.3.2.0 = Counter32: 769
-.1.3.6.1.4.1.8072.9999.9999.7.3.3.0 = Counter32: 375
+.1.3.6.1.4.1.8072.9999.9999.7.2.8.0 = Gauge32: 489
+.1.3.6.1.4.1.8072.9999.9999.7.2.9.0 = Gauge32: 1
+.1.3.6.1.4.1.8072.9999.9999.7.2.10.0 = Gauge32: 54
+.1.3.6.1.4.1.8072.9999.9999.7.2.20.0 = Gauge32: 201363456
+.1.3.6.1.4.1.8072.9999.9999.7.2.21.0 = Counter64: 557809
+.1.3.6.1.4.1.8072.9999.9999.7.2.22.0 = Gauge32: 59510452
+.1.3.6.1.4.1.8072.9999.9999.7.2.23.0 = Gauge32: 28
+.1.3.6.1.4.1.8072.9999.9999.7.3.1.0 = Counter32: 896
+.1.3.6.1.4.1.8072.9999.9999.7.3.2.0 = Counter32: 896
+.1.3.6.1.4.1.8072.9999.9999.7.3.3.0 = Counter32: 378
 .1.3.6.1.4.1.8072.9999.9999.7.3.4.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.5.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.6.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.7.0 = Counter32: 0
-.1.3.6.1.4.1.8072.9999.9999.7.3.8.0 = Counter32: 5
+.1.3.6.1.4.1.8072.9999.9999.7.3.8.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.9.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.10.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.11.0 = Counter32: 0
@@ -237,29 +292,129 @@ window · 9 unsupported security levels · 10 SNMPv1/v2c messages dropped · 11 
 12 SET requests refused · 13 malformed messages · 14 responses too big · 15 other errors · 16 INFORMs sent ·
 17 INFORMs acknowledged · 18 INFORMs failed. The template polls 1, 4, 6, 7, 8, 11 and 12.
 
-`.3.8.0 = 5` on the reader is real: after the reboot, managers still held the engine's previous boots value,
-were refused as outside the time window, and resynchronized. It happens once per manager after a reboot.
-
-Simulator, `{ROOT}.2` and `{ROOT}.3`:
+R700, `{ROOT}.5` (antenna table, then the reader's RFID status and the collection). The rows run column by
+column: column 2 for ports 1 to 4, then column 3, and so on.
 
 ```text
-.1.3.6.1.4.1.8072.9999.9999.7.2.1.0 = Gauge32: 3000
-.1.3.6.1.4.1.8072.9999.9999.7.2.2.0 = Gauge32: 180
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.2 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.3 = INTEGER: 3
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.4 = INTEGER: 4
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.2 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.3 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.4 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.2 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.3 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.4 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.1 = INTEGER: 1550
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.2 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.3 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.4 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.1 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.2 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.3 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.4 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.1 = Counter64: 628431
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.1 = Gauge32: 4
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.2 = Gauge32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.3 = Gauge32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.4 = Gauge32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.1 = Counter64: 165063
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.2 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.3 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.4 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.1 = STRING: "Cabinet"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.2 = STRING: "Cabinet"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.3 = STRING: "Cabinet"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.4 = STRING: "Cabinet"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.1 = INTEGER: 1550
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.2 = INTEGER: 1500
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.3 = INTEGER: 1500
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.4 = INTEGER: 1500
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.1 = INTEGER: -80
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.2 = INTEGER: -80
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.3 = INTEGER: -80
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.4 = INTEGER: -80
+.1.3.6.1.4.1.8072.9999.9999.7.5.2.1.0 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.2.2.0 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.2.3.0 = Gauge32: 1298
+.1.3.6.1.4.1.8072.9999.9999.7.5.3.1.0 = Gauge32: 23
+.1.3.6.1.4.1.8072.9999.9999.7.5.3.2.0 = INTEGER: 1
+```
+
+Simulator, `{ROOT}.2`, `{ROOT}.3` and `{ROOT}.5`:
+
+```text
+.1.3.6.1.4.1.8072.9999.9999.7.2.1.0 = Gauge32: 3604
+.1.3.6.1.4.1.8072.9999.9999.7.2.2.0 = Gauge32: 176
 .1.3.6.1.4.1.8072.9999.9999.7.2.3.0 = Gauge32: 2835
-.1.3.6.1.4.1.8072.9999.9999.7.2.4.0 = Gauge32: 49809
-.1.3.6.1.4.1.8072.9999.9999.7.2.5.0 = Gauge32: 744
-.1.3.6.1.4.1.8072.9999.9999.7.2.6.0 = Gauge32: 538
+.1.3.6.1.4.1.8072.9999.9999.7.2.4.0 = Gauge32: 78828
+.1.3.6.1.4.1.8072.9999.9999.7.2.5.0 = Gauge32: 513
+.1.3.6.1.4.1.8072.9999.9999.7.2.6.0 = Gauge32: 550
 .1.3.6.1.4.1.8072.9999.9999.7.2.7.0 = Gauge32: 1050
 .1.3.6.1.4.1.8072.9999.9999.7.2.8.0 = Gauge32: 554
 .1.3.6.1.4.1.8072.9999.9999.7.2.9.0 = Gauge32: 1
-.1.3.6.1.4.1.8072.9999.9999.7.2.10.0 = Gauge32: 1
-.1.3.6.1.4.1.8072.9999.9999.7.2.20.0 = Gauge32: 202758486
-.1.3.6.1.4.1.8072.9999.9999.7.2.21.0 = Counter64: 208523
-.1.3.6.1.4.1.8072.9999.9999.7.2.22.0 = Gauge32: 97821910
+.1.3.6.1.4.1.8072.9999.9999.7.2.10.0 = Gauge32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.2.20.0 = Gauge32: 208093154
+.1.3.6.1.4.1.8072.9999.9999.7.2.21.0 = Counter64: 143853
+.1.3.6.1.4.1.8072.9999.9999.7.2.22.0 = Gauge32: 93669705
 .1.3.6.1.4.1.8072.9999.9999.7.2.23.0 = Gauge32: 27
-.1.3.6.1.4.1.8072.9999.9999.7.3.1.0 = Counter32: 372
-.1.3.6.1.4.1.8072.9999.9999.7.3.2.0 = Counter32: 372
-.1.3.6.1.4.1.8072.9999.9999.7.3.3.0 = Counter32: 2
+.1.3.6.1.4.1.8072.9999.9999.7.3.1.0 = Counter32: 256
+.1.3.6.1.4.1.8072.9999.9999.7.3.2.0 = Counter32: 256
+.1.3.6.1.4.1.8072.9999.9999.7.3.3.0 = Counter32: 1
 .1.3.6.1.4.1.8072.9999.9999.7.3.4.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.5.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.6.0 = Counter32: 0
@@ -275,11 +430,110 @@ Simulator, `{ROOT}.2` and `{ROOT}.3`:
 .1.3.6.1.4.1.8072.9999.9999.7.3.16.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.17.0 = Counter32: 0
 .1.3.6.1.4.1.8072.9999.9999.7.3.18.0 = Counter32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.2 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.3 = INTEGER: 3
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.1.4 = INTEGER: 4
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.2 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.3 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.2.4 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.2 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.3 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.3.4 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.1 = INTEGER: 1550
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.2 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.3 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.4.4 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.1 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.2 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.3 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.5.4 = INTEGER: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.1 = Counter64: 503558
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.6.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.1 = Gauge32: 4
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.2 = Gauge32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.3 = Gauge32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.7.4 = Gauge32: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.1 = Counter64: 125890
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.8.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.9.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.10.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.11.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.12.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.13.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.14.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.15.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.16.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.17.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.18.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.1 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.2 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.3 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.19.4 = Counter64: 0
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.1 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.2 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.3 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.20.4 = INTEGER: 2
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.1 = STRING: "Dock door 1"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.2 = STRING: "Unused"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.3 = STRING: "Unused"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.21.4 = STRING: "Unused"
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.1 = INTEGER: 1550
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.2 = INTEGER: 1550
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.3 = INTEGER: 1550
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.22.4 = INTEGER: 1550
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.1 = INTEGER: -92
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.2 = INTEGER: -92
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.3 = INTEGER: -92
+.1.3.6.1.4.1.8072.9999.9999.7.5.1.1.23.4 = INTEGER: -92
+.1.3.6.1.4.1.8072.9999.9999.7.5.2.1.0 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.2.2.0 = INTEGER: 1
+.1.3.6.1.4.1.8072.9999.9999.7.5.2.3.0 = Gauge32: 513
+.1.3.6.1.4.1.8072.9999.9999.7.5.3.1.0 = Gauge32: 33
+.1.3.6.1.4.1.8072.9999.9999.7.5.3.2.0 = INTEGER: 1
 ```
 
-The simulator gets a new engine ID each time its container is recreated, because it keeps no state.
-SmartReader's agent keeps its engine ID across CAP restarts and reboots: `80 00 65 1A 05 4C B3 D1 76 1C D7 3E 86`
-on the bench reader, with boots climbing from 1 to 7 over the tests.
+SmartReader's agent keeps its engine ID and boots across CAP restarts and reboots: on the first test build
+the ID stayed the same while boots climbed from 1 to 7. A new CAP install starts with a new engine ID
+(`80 00 65 1A 05 E3 EF CA 5F 21 07 4D 3E` after installing the build with the antenna table), because the
+installer does not carry the agent's state over yet. The simulator gets a new engine ID each time its
+container is recreated, because it keeps no state.
 
 ### What an INFORM looks like
 
@@ -290,8 +544,8 @@ to the reader's trap-only interface. The reader's host name is masked. The test 
 test: its last varbind is a fixed `1`, not a reading.
 
 ```text
-2026-10-13T16:24:55+0000 UDP: [172.31.67.1]:38675->[172.31.67.3]:1162
-DISMAN-EVENT-MIB::sysUpTimeInstance = 130727
+2026-10-13T18:32:33+0000 UDP: [172.31.67.1]:48116->[172.31.67.3]:1162
+DISMAN-EVENT-MIB::sysUpTimeInstance = 136538
 SNMPv2-MIB::snmpTrapOID.0 = NET-SNMP-MIB::netSnmpPlaypen.7.0.1
 SNMPv2-MIB::sysName.0 = impinj-xx-xx-xx
 NET-SNMP-MIB::netSnmpPlaypen.7.2.4.0 = 1
@@ -300,8 +554,8 @@ NET-SNMP-MIB::netSnmpPlaypen.7.2.4.0 = 1
 From the simulator. It arrives from the container's own address, so it lands on the simulator's host:
 
 ```text
-2026-10-13T16:24:56+0000 UDP: [172.31.67.20]:46628->[172.31.67.3]:1162
-DISMAN-EVENT-MIB::sysUpTimeInstance = 70123490
+2026-10-13T18:32:33+0000 UDP: [172.31.67.20]:42926->[172.31.67.3]:1162
+DISMAN-EVENT-MIB::sysUpTimeInstance = 70889304
 SNMPv2-MIB::snmpTrapOID.0 = NET-SNMP-MIB::netSnmpPlaypen.7.0.1
 SNMPv2-MIB::sysName.0 = smartreader-snmpv3-sim
 ```
@@ -320,9 +574,14 @@ SNMPv2-MIB::sysName.0 = smartreader-snmpv3-sim
 | Engine restarted | Info |
 | Requests with a wrong key | Warning |
 | Notification received | Info |
+| Reader RFID not operational | High |
+| RFID statistics older than 5 minutes | Warning |
+| The CAP cannot collect RFID statistics (no successful collection in 10 minutes) | Warning |
+| *Prototype:* antenna enabled in SmartReader but not operational, one per discovered port | Average |
 
-On the reader's host, the HTTP template raises its own MQTT and disk problems from `/metrics`. The lab keeps
-both so you can compare them; a production template would pick one.
+On the reader's host, the HTTP template raises its own MQTT and disk problems from `/metrics`, and the
+native SNMP v2c template its own antenna and RFID problems from the EPCglobal MIB. The lab keeps them all so
+you can compare them; a production setup would pick one source for each.
 
 ## Import the template
 
@@ -364,8 +623,9 @@ Template macros:
 When the final root is allocated, change `{$SR.SNMP.ROOT}`, and change the trap item's key too: its regular
 expression spells the provisional root out.
 
-Checked on 2026-10-13: the file imported into Zabbix 7.0.31 with 27 items, all enabled, and 10 triggers.
-On a host pointed at the simulator, 26 of the 26 SNMP items collected a value.
+Checked on 2026-10-13: the file imported into Zabbix 7.0.31 with 33 items, all enabled, 13 triggers and the
+antenna discovery rule (23 item prototypes, 1 trigger prototype). On a host pointed at the simulator, 32 of
+the 32 SNMP items and 92 of the 92 discovered antenna items collected a value.
 
 ## Checked on
 
@@ -375,7 +635,7 @@ On a host pointed at the simulator, 26 of the 26 SNMP items collected a value.
 | Reader | R700 Rev1, firmware 10.4.0 |
 | CAP | SmartReader SNMPv3 test build |
 | Zabbix | 7.0.31 |
-| Results | All 26 SNMPv3 items supported over authPriv SHA-256 / AES-128, on the reader and on the simulator, and all 27 keys of the template collected in one run (16:25 UTC, [above](#item-keys-and-values-read-in-the-tests)). The CAP's INFORM was acknowledged and matched on the reader's host; the simulator's on its own host. *Requests with a wrong key* opened for requests with a wrong key. The reader's v2c items and traps worked as before. The published template imported and collected |
+| Results | All SNMPv3 items supported over authPriv SHA-256 / AES-128, on the reader and on the simulator: the 33 keys of the template and the 92 discovered antenna items collected in one run (18:32 UTC, [above](#item-keys-and-values-read-in-the-tests)). The CAP's INFORM was acknowledged and matched on the reader's host; the simulator's on its own host. *Requests with a wrong key* opened for requests with a wrong key. The reader's v2c items and traps worked as before. The published template imported and collected, antenna discovery included |
 
 An earlier run against the same agent (2026-10-09) also passed SHA-512 / AES-256 and SHA-384 / AES-192 from
 Net-SNMP 5.9, and SHA-512 / AES-256 from a Zabbix 7.0 interface.
