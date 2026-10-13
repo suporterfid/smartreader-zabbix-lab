@@ -57,6 +57,29 @@ services:
     volumes:
       - snmptraps:/var/lib/zabbix/snmptraps
       - ./mibs:/var/lib/zabbix/mibs:ro
+      # SNMPv3 users for SmartReader's informs: smartreader_snmpv3.py writes snmptrapd_custom.conf here.
+      # snmptrapd also keeps its engine ID in this folder, so informs survive a container rebuild.
+      - ./snmptrapd:/var/lib/zabbix/snmptrapd_config
+    restart: unless-stopped
+
+  # Optional (docker compose --profile snmpv3-sim up -d): Net-SNMP's agent answering for SmartReader's
+  # experimental SNMPv3 objects with synthetic values. See docs/smartreader-snmpv3.md.
+  smartreader-snmpv3-sim:
+    profiles: ["snmpv3-sim"]
+    build: ./snmpv3-sim
+    environment:
+      SR_SNMPV3_USER: ${SR_SNMPV3_USER:-}
+      SR_SNMPV3_AUTH_PROTOCOL: ${SR_SNMPV3_AUTH_PROTOCOL:-SHA256}
+      SR_SNMPV3_AUTH_PASSPHRASE: ${SR_SNMPV3_AUTH_PASSPHRASE:-}
+      SR_SNMPV3_PRIV_PROTOCOL: ${SR_SNMPV3_PRIV_PROTOCOL:-AES128}
+      SR_SNMPV3_PRIV_PASSPHRASE: ${SR_SNMPV3_PRIV_PASSPHRASE:-}
+      SR_SNMPV3_PORT: ${SR_SNMPV3_PORT:-1161}
+      SR_SNMPV3_INFORM_TARGET: zabbix-snmptraps:1162
+    networks:
+      default:
+        ipv4_address: 172.31.67.20
+    depends_on:
+      - zabbix-snmptraps
     restart: unless-stopped
 
 volumes:

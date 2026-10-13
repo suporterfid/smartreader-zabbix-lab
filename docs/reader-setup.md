@@ -143,7 +143,9 @@ Some notes on these settings:
 - **The traps are v2c.** That is the only version the R700 sends.
 - **The reader takes up to four trap destinations.** Use `config snmp trap sink2 <host>` and so on.
 
-The lab is built and tested for SNMP v2c only.
+The lab is built and tested for SNMP v2c on the reader's own agent. SNMPv3 comes from SmartReader's own
+agent instead, which is experimental and not in a released CAP yet: see
+[smartreader-snmpv3.md](smartreader-snmpv3.md).
 
 ## 5. Label the reader (optional)
 

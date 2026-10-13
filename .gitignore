@@ -13,3 +13,7 @@ __pycache__/
 
 # Browser automation scratch output
 .playwright-mcp/
+
+# snmptrapd's SNMPv3 users (passphrases) and its persistent state; see snmptrapd/README.md
+snmptrapd/*
+!snmptrapd/README.md

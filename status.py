@@ -2,6 +2,7 @@
 
   python status.py           # current state
   python status.py --wait    # first wait (up to 4 minutes) until every item has reported once
+  python status.py --host smartreader-snmpv3-sim   # another lab host, e.g. the SNMPv3 simulator
 """
 import sys
 import time
@@ -11,7 +12,8 @@ from lablib import ENV
 from provision import HOST, call
 
 provision.TOKEN = call("user.login", {"username": ENV["ZBX_WEB_USER"], "password": ENV["ZBX_WEB_PASSWORD"]})
-hostid = call("host.get", {"filter": {"host": [HOST]}, "output": ["hostid"]})[0]["hostid"]
+HOST_NAME = sys.argv[sys.argv.index("--host") + 1] if "--host" in sys.argv else HOST
+hostid = call("host.get", {"filter": {"host": [HOST_NAME]}, "output": ["hostid"]})[0]["hostid"]
 
 
 def items():
@@ -58,4 +60,5 @@ host = call("host.get", {"hostids": hostid, "output": ["host"], "selectInterface
                          "selectInventory": ["name", "serialno_a", "hardware", "os", "software_app_a", "location"]})[0]
 print("\nInterfaces:", [(i["ip"], {"0": "unknown", "1": "available", "2": "unavailable"}[i["available"]])
                         for i in host["interfaces"]])
-print("Inventory:", {k: v for k, v in host["inventory"].items() if v})
+inventory = host["inventory"] if isinstance(host["inventory"], dict) else {}  # [] when the host keeps none
+print("Inventory:", {k: v for k, v in inventory.items() if v})

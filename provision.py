@@ -15,11 +15,24 @@ TOKEN = None
 T_SNMP = "Impinj R700 by SNMP"
 T_CAP = "SmartReader CAP by HTTP"
 T_REST = "Impinj R700 REST API"
+T_SR3 = "SmartReader CAP by SNMPv3"  # shown as "... (experimental)"
 HOST = "r700-bench"
+SIM_HOST = "smartreader-snmpv3-sim"
+SIM_IP = "172.31.67.20"  # pinned in docker-compose.yml
 # Address Zabbix sees as the source of the reader's traps. Docker Desktop rewrites it to the gateway of the
 # lab network (see docker-compose.yml); set TRAP_SOURCE_IP to the reader's own IP, or leave it empty, where
 # the source address is kept (Docker Engine on Linux, or a native proxy).
 TRAP_SOURCE_IP = ENV.get("TRAP_SOURCE_IP", "172.31.67.1")
+
+# SmartReader's own SNMPv3 agent (experimental, off unless .env turns it on): see docs/smartreader-snmpv3.md.
+SR3_ON_READER = ENV.get("SR_SNMPV3_ENABLED", "0") == "1"
+SR3_SIMULATOR = ENV.get("SR_SNMPV3_SIMULATOR", "0") == "1"
+SR3_PORT = ENV.get("SR_SNMPV3_PORT", "1161")
+SR3_ROOT = ENV.get("SR_SNMP_ROOT", "1.3.6.1.4.1.8072.9999.9999.7").strip(".")
+AUTH_PROTOCOLS = {"SHA1": 1, "SHA224": 2, "SHA256": 3, "SHA384": 4, "SHA512": 5}
+PRIV_PROTOCOLS = {"AES128": 1, "AES192": 2, "AES256": 3}
+# Every SmartReader notification sits under {$SR.SNMP.ROOT}.0; snmptrapd prints it by name or number.
+SR3_TRAP_KEY = 'snmptrap["netSnmpPlaypen\\.7\\.0\\.|8072\\.9999\\.9999\\.7\\.0\\."]'
 
 # Item types, value types and preprocessing step types from the Zabbix 7.0 API.
 SNMP, TRAP, SIMPLE, INTERNAL, DEPENDENT, HTTP = 20, 17, 3, 5, 18, 19
@@ -86,10 +99,10 @@ def wait_for_api():
 
 
 def cleanup():
-    hosts = call("host.get", {"filter": {"host": [HOST]}, "output": ["hostid"]})
+    hosts = call("host.get", {"filter": {"host": [HOST, SIM_HOST]}, "output": ["hostid"]})
     if hosts:
         call("host.delete", [h["hostid"] for h in hosts])
-    templates = call("template.get", {"filter": {"host": [T_SNMP, T_CAP, T_REST]}, "output": ["templateid"]})
+    templates = call("template.get", {"filter": {"host": [T_SNMP, T_CAP, T_REST, T_SR3]}, "output": ["templateid"]})
     if templates:
         call("template.delete", [t["templateid"] for t in templates])
 
@@ -99,9 +112,9 @@ def group(kind, name):
     return found[0]["groupid"] if found else call(f"{kind}.create", {"name": name})["groupids"][0]
 
 
-def template(name, groupid, description, macros=()):
+def template(name, groupid, description, macros=(), visible_name=None):
     return call("template.create", {
-        "host": name, "groups": [{"groupid": groupid}], "description": description,
+        "host": name, "name": visible_name or name, "groups": [{"groupid": groupid}], "description": description,
         "macros": list(macros),
     })["templateids"][0]
 
@@ -398,6 +411,148 @@ def build_rest_template(groupid):
     return tid
 
 
+# ---------------------------------------------------------------- SmartReader CAP by SNMPv3 (experimental)
+
+def build_sr3_template(groupid):
+    """SmartReader's own SNMPv3 agent: CAP health without HTTP credentials in Zabbix.
+
+    The OIDs follow the experimental agent of the SmartReader SNMPv3 test build and sit under the provisional
+    root in {$SR.SNMP.ROOT}. When the final arc is allocated, only that macro changes.
+    """
+    tid = template(T_SR3, groupid, "EXPERIMENTAL. SmartReader CAP health from the CAP's own SNMPv3 agent "
+                   "(authPriv, read-only): CPU, memory, disk, temperatures, uptimes, MQTT, agent counters and "
+                   "SNMPv3 informs. Needs a SmartReader CAP that ships the agent; the object layout and root "
+                   "are provisional. The interface is SNMPv3 on UDP 1161.", macros=[
+                       {"macro": "{$SR.SNMP.ROOT}", "value": SR3_ROOT,
+                        "description": "Root of SmartReader's objects (provisional)"},
+                       {"macro": "{$SR.DISK.MAX}", "value": "85"},
+                       {"macro": "{$SR.PENDING.MAX}", "value": "100"},
+                       {"macro": "{$SR.TEMP.MARGIN}", "value": "5"},
+                   ], visible_name=f"{T_SR3} (experimental)")
+    updown = updown_map(tid)
+    b = Builder(tid)
+    T = T_SR3
+    root = "{$SR.SNMP.ROOT}"
+    t3 = tags(component="smartreader-snmpv3")
+
+    # Created disabled: on a host with two SNMP interfaces Zabbix links them to the main (v2c) one and may
+    # poll them there before they are moved. point_sr3_items / build_sim_host enable them on the right one.
+    def snmp(name, key, oid, vtype, delay="1m", **extra):
+        return b.item(name, key, SNMP, vtype, snmp_oid=oid, delay=delay, tags=t3, status=1, **extra)
+
+    # The agent's own identity. sysUpTime is the agent's uptime, by definition (RFC 3418).
+    snmp("SNMPv3 agent uptime", "sr3.agent.uptime", "1.3.6.1.2.1.1.3.0", FLOAT, units="uptime",
+         preprocessing=[step(MULT, "0.01")])
+    snmp("SNMPv3 agent description", "sr3.sysdescr", "1.3.6.1.2.1.1.1.0", CHAR, delay="1h")
+    snmp("SNMPv3 agent object ID", "sr3.sysobjectid", "1.3.6.1.2.1.1.2.0", CHAR, delay="1h")
+    snmp("SNMPv3 engine ID", "sr3.engine.id", "1.3.6.1.6.3.10.2.1.1.0", CHAR, delay="1h")
+    snmp("SNMPv3 engine boots", "sr3.engine.boots", "1.3.6.1.6.3.10.2.1.2.0", UINT, delay="5m")
+
+    # Health, as the CAP already collects it (the same sources as /metrics).
+    health = (
+        ("CAP process CPU", "sr3.cpu", 1, FLOAT, "%", [step(MULT, "0.01")]),
+        ("CAP process memory", "sr3.memory", 2, FLOAT, "B", [step(MULT, "1048576")]),
+        ("CAP file system used", "sr3.disk.pused", 3, FLOAT, "%", [step(MULT, "0.01")]),
+        ("Reader OS uptime", "sr3.os.uptime", 4, FLOAT, "uptime", []),
+        ("CAP application uptime", "sr3.app.uptime", 5, FLOAT, "uptime", []),
+        ("CPU temperature", "sr3.cpu.temp", 6, FLOAT, "°C", [step(MULT, "0.1")]),
+        ("CPU temperature limit", "sr3.cpu.temp.max", 7, FLOAT, "°C", [step(MULT, "0.1")]),
+        ("CPU temperature peak", "sr3.cpu.temp.peak", 8, FLOAT, "°C", [step(MULT, "0.1")]),
+        ("CAP connected to MQTT broker", "sr3.mqtt.connected", 9, UINT, "", []),
+        ("CAP MQTT messages pending", "sr3.mqtt.pending", 10, UINT, "", []),
+        ("CAP resident memory", "sr3.process.rss", 20, UINT, "B", []),
+        # Milliseconds of CPU per second, divided by 10, is percent of one core.
+        ("CAP CPU, % of one core", "sr3.process.cpu", 21, FLOAT, "%", [step(CHANGE_SEC), step(MULT, "0.1")]),
+        ("CAP managed heap", "sr3.process.heap", 22, UINT, "B", []),
+        ("CAP threads", "sr3.process.threads", 23, UINT, "", []),
+    )
+    for name, key, index, vtype, units, pre in health:
+        snmp(name, key, f"{root}.2.{index}.0", vtype, units=units, preprocessing=pre)
+    call("item.update", {"itemid": b.items["sr3.mqtt.connected"], "valuemapid": updown})
+
+    # The agent's own counters, as rates.
+    counters = (
+        ("SNMPv3 requests", "sr3.requests", 1),
+        ("SNMPv3 unknown user names", "sr3.unknown.users", 4),
+        ("SNMPv3 wrong digests (authentication failures)", "sr3.wrong.digests", 6),
+        ("SNMPv3 decryption errors", "sr3.decryption.errors", 7),
+        ("SNMPv3 requests outside the time window", "sr3.time.window", 8),
+        ("SNMPv3 requests dropped by the rate limit", "sr3.rate.limited", 11),
+        ("SNMPv3 SET requests refused", "sr3.set.refused", 12),
+    )
+    for name, key, index in counters:
+        snmp(f"{name} per second", key, f"{root}.3.{index}.0", FLOAT, units="rps",
+             preprocessing=[step(CHANGE_SEC)])
+
+    b.item("Trap: SmartReader SNMPv3 notification", SR3_TRAP_KEY, TRAP, LOG, tags=tags(component="traps"))
+
+    down = trigger("SmartReader SNMPv3 agent not answering", f"nodata(/{T}/sr3.agent.uptime,5m)=1", AVERAGE)
+    dep = [{"triggerid": down}]
+    trigger("CAP lost the MQTT broker (SNMPv3)", f"max(/{T}/sr3.mqtt.connected,5m)=0", HIGH, dependencies=dep)
+    trigger("CAP MQTT messages backing up (SNMPv3)", f"min(/{T}/sr3.mqtt.pending,10m)>{{$SR.PENDING.MAX}}",
+            AVERAGE, dependencies=dep)
+    trigger("CAP file system above {$SR.DISK.MAX}% (SNMPv3)", f"last(/{T}/sr3.disk.pused)>{{$SR.DISK.MAX}}",
+            WARNING, dependencies=dep)
+    trigger("Reader CPU running hot (SNMPv3)",
+            f"last(/{T}/sr3.cpu.temp)>last(/{T}/sr3.cpu.temp.max)-{{$SR.TEMP.MARGIN}}", WARNING, dependencies=dep)
+    trigger("Reader rebooted (OS uptime via SNMPv3)", f"last(/{T}/sr3.os.uptime)<600", WARNING, dependencies=dep)
+    trigger("CAP restarted (SNMPv3)", f"last(/{T}/sr3.app.uptime)<600", WARNING, dependencies=dep)
+    trigger("SmartReader SNMP engine restarted", f"change(/{T}/sr3.engine.boots)>0", INFO, manual_close=1,
+            dependencies=dep)
+    # A wrong key shows up as a wrong digest or, when the privacy key is wrong too, as a decryption error: the
+    # agent of the SmartReader test build decrypts before it checks the digest.
+    trigger("SNMPv3 requests with a wrong key against SmartReader",
+            f"max(/{T}/sr3.wrong.digests,5m)>0 or max(/{T}/sr3.decryption.errors,5m)>0", WARNING,
+            dependencies=dep, comments="Someone is trying the agent with a wrong key; check who can reach UDP 1161.")
+    trigger("SmartReader SNMPv3 notification received", f"nodata(/{T}/{SR3_TRAP_KEY},15m)=0", INFO,
+            manual_close=1, comments="Raised for 15 minutes after an inform arrives; close it manually once handled.")
+    return tid
+
+
+def sr3_interface(ip, main):
+    """An SNMPv3 interface on SmartReader's agent port; the credentials come from secret host macros."""
+    return {"type": 2, "main": main, "useip": 1, "ip": ip, "dns": "", "port": SR3_PORT,
+            "details": {"version": 3, "bulk": 1, "max_repetitions": 10, "contextname": "",
+                        "securityname": "{$SR.SNMPV3.USER}", "securitylevel": 2,
+                        "authprotocol": AUTH_PROTOCOLS[ENV.get("SR_SNMPV3_AUTH_PROTOCOL", "SHA256")],
+                        "authpassphrase": "{$SR.SNMPV3.AUTHPASS}",
+                        "privprotocol": PRIV_PROTOCOLS[ENV.get("SR_SNMPV3_PRIV_PROTOCOL", "AES128")],
+                        "privpassphrase": "{$SR.SNMPV3.PRIVPASS}"}}
+
+
+def sr3_macros():
+    return [
+        {"macro": "{$SR.SNMPV3.USER}", "value": ENV.get("SR_SNMPV3_USER", "")},
+        {"macro": "{$SR.SNMPV3.AUTHPASS}", "value": ENV.get("SR_SNMPV3_AUTH_PASSPHRASE", ""), "type": 1},
+        {"macro": "{$SR.SNMPV3.PRIVPASS}", "value": ENV.get("SR_SNMPV3_PRIV_PASSPHRASE", ""), "type": 1},
+    ]
+
+
+def point_sr3_items(hostid, ip):
+    """Move the SNMPv3 items to SmartReader's interface (a host with two SNMP interfaces links every SNMP item
+    to the main one) and enable them there."""
+    interfaces = call("hostinterface.get", {"hostids": hostid, "output": ["interfaceid", "ip", "port"]})
+    sr3_if = next(i["interfaceid"] for i in interfaces if i["ip"] == ip and i["port"] == SR3_PORT)
+    items = call("item.get", {"hostids": hostid, "filter": {"type": SNMP}, "search": {"key_": "sr3."},
+                              "startSearch": True, "output": ["itemid"]})
+    for it in items:
+        call("item.update", {"itemid": it["itemid"], "interfaceid": sr3_if, "status": 0})
+    # An item enabled now is first polled somewhere inside its interval (an hour for the identity items).
+    call("task.create", [{"type": 6, "request": {"itemid": it["itemid"]}} for it in items])
+    return len(items)
+
+
+def build_sim_host(hostgroup, templateid):
+    hostid = call("host.create", {
+        "host": SIM_HOST, "name": "SmartReader SNMPv3 simulator",
+        "groups": [{"groupid": hostgroup}], "templates": [{"templateid": templateid}],
+        "interfaces": [sr3_interface(SIM_IP, 1)], "macros": sr3_macros(),
+        "tags": tags(site="lab", role="simulator"),
+    })["hostids"][0]
+    point_sr3_items(hostid, SIM_IP)
+    return hostid
+
+
 # ---------------------------------------------------------------- host
 
 def build_host(hostgroup, templateids):
@@ -412,7 +567,8 @@ def build_host(hostgroup, templateids):
              "details": {"version": 2, "bulk": 1, "community": "{$SNMP_COMMUNITY}"}},
         ] + ([{"type": 2, "main": 0, "useip": 1, "ip": TRAP_SOURCE_IP, "dns": "", "port": "161",
                "details": {"version": 2, "bulk": 1, "community": "{$SNMP_COMMUNITY}"}}]
-             if separate_trap_if else []),
+             if separate_trap_if else [])
+        + ([sr3_interface(ENV["READER_HOST"], 0)] if SR3_ON_READER else []),
         "macros": [
             {"macro": "{$SNMP_COMMUNITY}", "value": ENV["SNMP_COMMUNITY"]},
             {"macro": "{$CAP.USER}", "value": ENV["CAP_USER"]},
@@ -421,7 +577,7 @@ def build_host(hostgroup, templateids):
             {"macro": "{$READER.PASSWORD}", "value": ENV["READER_PASSWORD"], "type": 1},
             # Ports with an antenna attached; empty ports in the preset would raise "antenna down" permanently.
             {"macro": "{$R700.ANTENNAS}", "value": ENV.get("R700_ANTENNAS", ".*")},
-        ],
+        ] + (sr3_macros() if SR3_ON_READER else []),
         "tags": tags(site="lab", role="r700"),
     })["hostids"][0]
 
@@ -432,6 +588,8 @@ def build_host(hostgroup, templateids):
         trap_if = next(i["interfaceid"] for i in interfaces if i["ip"] == TRAP_SOURCE_IP)
         for it in trap_items:
             call("item.update", {"itemid": it["itemid"], "interfaceid": trap_if})
+    if SR3_ON_READER:
+        point_sr3_items(hostid, ENV["READER_HOST"])
     return hostid, len(trap_items)
 
 
@@ -445,8 +603,14 @@ def main():
     t1 = build_snmp_template(tgroup)
     t2 = build_cap_template(tgroup)
     t3 = build_rest_template(tgroup)
-    hostid, traps = build_host(hgroup, [t1, t2, t3])
-    print(f"templates {t1} {t2} {t3}; host {HOST} ({hostid}); {traps} trap items on the trap interface")
+    t4 = build_sr3_template(tgroup) if (SR3_ON_READER or SR3_SIMULATOR) else None
+    hostid, traps = build_host(hgroup, [t1, t2, t3] + ([t4] if SR3_ON_READER else []))
+    print(f"templates {t1} {t2} {t3}{' ' + t4 if t4 else ''}; host {HOST} ({hostid}); "
+          f"{traps} trap items on the trap interface")
+    if SR3_ON_READER:
+        print(f"  SmartReader SNMPv3 (experimental) on {HOST}: {ENV['READER_HOST']}:{SR3_PORT}")
+    if SR3_SIMULATOR:
+        print(f"  simulator host {SIM_HOST} ({build_sim_host(hgroup, t4)}): {SIM_IP}:{SR3_PORT}")
     # dashboard.py imports this file as the module "provision", a separate copy from __main__; share the token.
     import dashboard
     dashboard.provision.TOKEN = TOKEN
