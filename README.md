@@ -113,6 +113,7 @@ snmpget -v2c -c wrong-community <reader> 1.3.6.1.2.1.1.5.0
 | `snmpv3-sim/` | Simulator of SmartReader's SNMPv3 agent (Net-SNMP), started with the `snmpv3-sim` compose profile |
 | `snmptrapd/` | Trap receiver's persistent configuration; holds the generated SNMPv3 user, git-ignored |
 | `docs/smartreader-snmpv3.md` | Tutorial for the experimental SNMPv3 part |
+| `templates/zbx_smartreader_cap_snmpv3.yaml` | The experimental SNMPv3 template, exported for import into your own Zabbix 7.0 |
 | `docs/reader-setup.md` | Step-by-step tutorial for preparing a reader |
 | `docs/images/` | Dashboard screenshots used in this README |
 | `docs/snmpwalk-r700-fw10.4.0.txt` | Sample walk of a reader, serial number and host name removed |
@@ -172,7 +173,8 @@ python status.py --host smartreader-snmpv3-sim --wait
 
 The reader's own agent is still polled over v2c and still sends v2c traps, as everything above describes.
 [docs/smartreader-snmpv3.md](docs/smartreader-snmpv3.md) covers the simulator, a reader whose CAP has the
-agent, what the template collects, and how it was checked.
+agent, every item key with values read on a reader and on the simulator, and how it was checked. To use the
+template in your own Zabbix, import [templates/zbx_smartreader_cap_snmpv3.yaml](templates/zbx_smartreader_cap_snmpv3.yaml).
 
 ## Traps and Docker Desktop
 
