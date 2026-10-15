@@ -1,6 +1,6 @@
 """Helpers for SmartReader's own SNMPv3 agent (EXPERIMENTAL). See docs/smartreader-snmpv3.md.
 
-  python smartreader_snmpv3.py credentials   # SmartReader SNMPv3 test build: copy its USM user into .env
+  python smartreader_snmpv3.py credentials   # copy the CAP's SNMPv3 user and protocols into .env (never the passphrases)
   python smartreader_snmpv3.py traps         # let the lab's snmptrapd accept SmartReader's informs
   python smartreader_snmpv3.py check [--sim] # one SNMPv3 GET against the CAP (or the simulator)
   python smartreader_snmpv3.py inform [--sim] # make the CAP (or the simulator) send an INFORM to the lab
@@ -27,7 +27,9 @@ def usm():
     """User, Net-SNMP protocol names and passphrases from .env."""
     missing = [k for k in ("SR_SNMPV3_USER", "SR_SNMPV3_AUTH_PASSPHRASE", "SR_SNMPV3_PRIV_PASSPHRASE") if not ENV.get(k)]
     if missing:
-        sys.exit(f"set {', '.join(missing)} in .env first (or run: python smartreader_snmpv3.py credentials)")
+        sys.exit(f"set {', '.join(missing)} in .env first. The user and protocols can come from the CAP "
+                 "(python smartreader_snmpv3.py credentials); the passphrases are the ones you typed or generated "
+                 "on its SNMP Monitoring page, which never returns them.")
     return (ENV["SR_SNMPV3_USER"], NETSNMP_AUTH[ENV.get("SR_SNMPV3_AUTH_PROTOCOL", "SHA256")],
             ENV["SR_SNMPV3_AUTH_PASSPHRASE"], NETSNMP_PRIV[ENV.get("SR_SNMPV3_PRIV_PROTOCOL", "AES128")],
             ENV["SR_SNMPV3_PRIV_PASSPHRASE"])
@@ -48,27 +50,36 @@ def set_env(values):
 
 
 def credentials():
-    """The SmartReader SNMPv3 test build generates its USM passphrases on the reader and shows them to the admin."""
+    """Copy the user, port and protocols the admin set on the CAP's SNMP Monitoring page into .env.
+
+    The CAP never returns the passphrases, so the two passphrase keys are left as they are in .env.
+    """
     import lablib
     try:
-        status, body = lablib.cap_get("/api/spike/snmp")
+        status, body = lablib.cap_get("/api/snmp/status")
     except Exception as exc:  # noqa: BLE001 - 404 and connection errors alike
-        sys.exit(f"the CAP did not answer /api/spike/snmp ({exc}). Only the SmartReader SNMPv3 test build has "
-                 "it; on another build, put the USM user its documentation gives you into .env by hand.")
+        sys.exit(f"the CAP did not answer /api/snmp/status ({exc}). Only a SmartReader build with the SNMPv3 "
+                 "agent has it; on another build, put the USM user its documentation gives you into .env by hand.")
     agent = json.loads(body)
-    user = next(u for u in agent["users"] if u["name"] == "srspike")
+    if not agent.get("available") or not agent.get("user"):
+        sys.exit("the CAP has no SNMPv3 user to copy: set the SNMPv3 user and passphrases on the CAP's SNMP "
+                 "Monitoring page first.")
     set_env({
         "SR_SNMPV3_ENABLED": "1",
         "SR_SNMPV3_PORT": str(agent.get("port", 1161)),
-        "SR_SNMPV3_USER": user["name"],
-        "SR_SNMPV3_AUTH_PROTOCOL": user["auth"].replace("-", ""),
-        "SR_SNMPV3_AUTH_PASSPHRASE": agent["authPassphrase"],
-        "SR_SNMPV3_PRIV_PROTOCOL": user["priv"].replace("-", ""),
-        "SR_SNMPV3_PRIV_PASSPHRASE": agent["privPassphrase"],
+        "SR_SNMPV3_USER": agent["user"],
+        "SR_SNMPV3_AUTH_PROTOCOL": agent["authProtocol"].upper(),
+        "SR_SNMPV3_PRIV_PROTOCOL": agent["privProtocol"].upper(),
     })
-    print(f"SmartReader SNMPv3 agent on {ENV['READER_HOST']}:{agent.get('port')}: {agent.get('binding')}, "
-          f"engine {agent.get('engineIdHex')}, boots {agent.get('engineBoots')}")
-    print(f"wrote SR_SNMPV3_* to .env for user {user['name']} ({user['auth']}, {user['priv']}); passphrases not shown")
+    print(f"SmartReader SNMPv3 agent on {ENV['READER_HOST']}:{agent.get('port')}: {agent.get('state')}, "
+          f"engine {agent.get('engineId')}, boots {agent.get('engineBoots')}")
+    if agent.get("error"):
+        print(f"the agent reports: {agent['error']}")
+    print(f"wrote SR_SNMPV3_* to .env for user {agent['user']} ({agent['authProtocol']}, {agent['privProtocol']})")
+    # ENV was read before set_env ran and set_env never touches the passphrases, so ENV still tells the truth.
+    if not (ENV.get("SR_SNMPV3_AUTH_PASSPHRASE") and ENV.get("SR_SNMPV3_PRIV_PASSPHRASE")):
+        print("the CAP never returns the passphrases: put the ones you typed on its SNMP Monitoring page into "
+              "SR_SNMPV3_AUTH_PASSPHRASE and SR_SNMPV3_PRIV_PASSPHRASE in .env")
 
 
 def traps():
@@ -116,7 +127,8 @@ def inform(sim):
         print("simulator INFORM:", "acknowledged" if out.returncode == 0 else out.stderr.strip())
         sys.exit(out.returncode)
     import urllib.parse
-    query = urllib.parse.urlencode({"host": ENV["LAB_HOST_IP"], "port": 162, "user": ENV["SR_SNMPV3_USER"]})
+    # The CAP sends with the SNMPv3 user configured on its SNMP Monitoring page, so no user is passed.
+    query = urllib.parse.urlencode({"host": ENV["LAB_HOST_IP"], "port": 162})
     status, body = _cap_post(f"/api/spike/snmp/inform?{query}")
     print("CAP INFORM:", status, body)
 

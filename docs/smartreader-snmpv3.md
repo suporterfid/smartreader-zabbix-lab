@@ -46,6 +46,10 @@ All in `.env`; `.env.example` lists them with their defaults.
 The simulator, the trap receiver and Zabbix all take the user from these settings. Zabbix keeps the
 passphrases as secret host macros (`{$SR.SNMPV3.AUTHPASS}`, `{$SR.SNMPV3.PRIVPASS}`).
 
+For a real reader the CAP's admin page owns the user, the protocols and the passphrases, and the CAP never
+returns a passphrase: `python smartreader_snmpv3.py credentials` copies everything else into `.env`, and the
+two passphrases are the ones you typed or generated there ([part B](#b-monitor-a-reader-whose-cap-has-the-agent)).
+
 ## A. Try it with the simulator
 
 No reader is involved. You need the lab running ([README](../README.md), quick start).
@@ -93,25 +97,31 @@ No reader is involved. You need the lab running ([README](../README.md), quick s
 
 ## B. Monitor a reader whose CAP has the agent
 
-1. **The USM user.**
-   - On the SmartReader **test build**, the agent generates its passphrases on the reader and shows them to
-     the CAP admin. Copy them into `.env`:
+1. On the CAP's admin page, open **SNMP Monitoring**. Enable the agent, set a user, and generate or type both
+   passphrases. Copy them before you apply: the CAP never shows them again.
+2. Put the two passphrases into `.env` as `SR_SNMPV3_AUTH_PASSPHRASE` and `SR_SNMPV3_PRIV_PASSPHRASE`, then
+   copy the rest of the settings from the CAP:
 
-     ```bash
-     python smartreader_snmpv3.py credentials   # sets SR_SNMPV3_ENABLED=1 and the SR_SNMPV3_* user
-     ```
+   ```bash
+   python smartreader_snmpv3.py credentials   # sets SR_SNMPV3_ENABLED=1, the port, the user and both protocols
+   ```
 
-   - On a later build, set the `SR_SNMPV3_*` values by hand to the user you configured in the CAP, and set
-     `SR_SNMPV3_ENABLED=1`.
+   `credentials` reads the CAP's `GET /api/snmp/status`, which answers to the CAP admin login and never
+   returns a passphrase. It leaves the two passphrase keys in `.env` as they are, and says so when they are
+   still empty. It stops with a message if the CAP has no SNMPv3 user yet. On a CAP without that endpoint, set
+   the `SR_SNMPV3_*` values by hand to the user you configured and set `SR_SNMPV3_ENABLED=1`.
 
-2. **Let the trap receiver accept the informs, and check the agent from the lab:**
+   With SHA-256 or stronger authentication the agent's privacy key is long enough for AES-192 and AES-256, so
+   Net-SNMP's plain (`AES-256`) and Cisco-style (`AES-256-C`) names both work.
+
+3. **Let the trap receiver accept the informs, and check the agent from the lab:**
 
    ```bash
    python smartreader_snmpv3.py traps
    python smartreader_snmpv3.py check
    ```
 
-3. **Build the Zabbix side:**
+4. **Build the Zabbix side:**
 
    ```bash
    python provision.py
@@ -123,11 +133,14 @@ No reader is involved. You need the lab running ([README](../README.md), quick s
    links every SNMP item to its main (v2c) one, so `provision.py` creates the SNMPv3 items disabled, moves
    them to the SNMPv3 interface, enables them there and asks for a first check.
 
-4. **An INFORM from the CAP** (test build):
+5. **An INFORM from the CAP** (test build):
 
    ```bash
    python smartreader_snmpv3.py inform
    ```
+
+   The CAP sends it with the user configured on its SNMP Monitoring page, so the lab passes only the trap
+   receiver's address and port.
 
    On Docker Desktop it arrives from `172.31.67.1`, like the reader's v2c traps, so it lands on the
    trap-only interface. There *Trap: SmartReader SNMPv3 notification* matches it before *Trap: other* can.
@@ -648,8 +661,9 @@ Net-SNMP 5.9, and SHA-512 / AES-256 from a Zabbix 7.0 interface.
 - **The first values of the hourly items** (description, object ID, engine ID) come from the check that
   `provision.py` requests. Without it, an item enabled after creation is first polled somewhere inside its
   hour.
-- **AES-192 and AES-256** have two key-extension variants in the SNMP world. With SHA-384 or SHA-512 the
-  localized key is long enough that they coincide. Pair AES-256 with SHA-512 and AES-192 with SHA-384.
+- **AES-192 and AES-256** have two key-extension variants in the SNMP world (Net-SNMP's `AES-256` and the
+  Cisco-style `AES-256-C`). With SHA-256 or stronger the localized key is long enough that they coincide, so
+  either name works and no particular pairing is needed.
 - **The INFORM user:** an INFORM is authenticated with the receiver's engine ID. One `createUser` in
   `snmptrapd/snmptrapd_custom.conf` therefore covers every SmartReader that uses the same user, and the
   receiver needs no reader's engine ID.
@@ -669,8 +683,9 @@ stay; delete it and restart `zabbix-snmptraps` to remove the SNMPv3 user from th
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `check` says `Unknown user name` | The user in `.env` is not the agent's | Set `SR_SNMPV3_USER` (or run `credentials` on the test build) |
-| `Authentication failure` or `Decryption error` | Wrong passphrase or protocol | Check the `SR_SNMPV3_*` values against the agent |
+| `check` says `Unknown user name` | The user in `.env` is not the agent's | Set `SR_SNMPV3_USER`, or run `credentials` to copy it from the CAP |
+| `credentials` says the CAP has no SNMPv3 user | The agent is not set up on the CAP's SNMP Monitoring page | Enable it there, set the user and both passphrases, apply, then run `credentials` again |
+| `Authentication failure` or `Decryption error` | Wrong passphrase or protocol | Check the `SR_SNMPV3_*` values against the CAP's SNMP Monitoring page. The CAP cannot show the passphrases again: if you lost them, generate new ones there |
 | `Timeout` from `check` (reader) | The CAP has no SNMPv3 agent, or UDP 1161 is blocked on the way | A released CAP does not have the agent yet; use the simulator |
 | SNMPv3 items show values of the reader's own agent | The items were polled on the v2c interface | Re-run `provision.py`; it moves and enables them |
 | INFORMs time out | snmptrapd does not know the user | `python smartreader_snmpv3.py traps` after every change of the `SR_SNMPV3_*` user |
