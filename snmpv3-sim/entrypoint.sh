@@ -23,7 +23,7 @@ cat > /etc/snmp/snmpd.conf <<EOF
 agentaddress udp:${PORT},udp6:${PORT}
 createUser ${SR_SNMPV3_USER} ${AUTH} "${SR_SNMPV3_AUTH_PASSPHRASE}" ${PRIV} "${SR_SNMPV3_PRIV_PASSPHRASE}"
 rouser ${SR_SNMPV3_USER} priv
-sysobjectid ${ROOT}.1
+sysobjectid ${ROOT}.1.1
 sysdescr SmartReader SNMPv3 simulator (lab, synthetic values)
 syscontact SmartReader Zabbix lab
 syslocation lab

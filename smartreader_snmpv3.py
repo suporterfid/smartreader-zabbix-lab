@@ -1,9 +1,9 @@
-"""Helpers for SmartReader's own SNMPv3 agent (EXPERIMENTAL). See docs/smartreader-snmpv3.md.
+"""Helpers for SmartReader's own SNMPv3 agent. See docs/smartreader-snmpv3.md.
 
   python smartreader_snmpv3.py credentials   # copy the CAP's SNMPv3 user and protocols into .env (never the passphrases)
   python smartreader_snmpv3.py traps         # let the lab's snmptrapd accept SmartReader's informs
   python smartreader_snmpv3.py check [--sim] # one SNMPv3 GET against the CAP (or the simulator)
-  python smartreader_snmpv3.py inform [--sim] # make the CAP (or the simulator) send an INFORM to the lab
+  python smartreader_snmpv3.py inform --sim [N] # make the simulator send notification number N (default 13) to the lab
 
 Nothing here touches the reader's own SNMP agent; reader_snmp.py does that.
 """
@@ -111,40 +111,25 @@ def v3_args():
 
 def check(sim):
     target = f"{SIM_IP if sim else ENV['READER_HOST']}:{ENV.get('SR_SNMPV3_PORT', '1161')}"
-    out = netsnmp("snmpget", *v3_args(), target, "1.3.6.1.2.1.1.1.0", "1.3.6.1.6.3.10.2.1.2.0", f"{ROOT}.2.1.0",
-                  f"{ROOT}.2.9.0")
+    out = netsnmp("snmpget", *v3_args(), target, "1.3.6.1.2.1.1.1.0", "1.3.6.1.6.3.10.2.1.2.0", f"{ROOT}.2.1.2.0",
+                  f"{ROOT}.2.3.1.0")
     print(f"SNMPv3 GET {target}:")
     print(out.stdout.strip() or out.stderr.strip())
     if out.returncode:
         sys.exit(out.returncode)
 
 
-def inform(sim):
-    if sim:
-        cmd = ["docker", "compose", "exec", "-T", "smartreader-snmpv3-sim", "snmpinform", *v3_args(),
-               "zabbix-snmptraps:1162", "", f"{ROOT}.0.1", "1.3.6.1.2.1.1.5.0", "s", "smartreader-snmpv3-sim"]
-        out = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True)
-        print("simulator INFORM:", "acknowledged" if out.returncode == 0 else out.stderr.strip())
-        sys.exit(out.returncode)
-    import urllib.parse
-    # The CAP sends with the SNMPv3 user configured on its SNMP Monitoring page, so no user is passed.
-    query = urllib.parse.urlencode({"host": ENV["LAB_HOST_IP"], "port": 162})
-    status, body = _cap_post(f"/api/spike/snmp/inform?{query}")
-    print("CAP INFORM:", status, body)
-
-
-def _cap_post(path):
-    import base64
-    import ssl
-    import urllib.request
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    req = urllib.request.Request(f"https://{ENV['READER_HOST']}:8443{path}", data=b"", method="POST")
-    token = base64.b64encode(f"{ENV['CAP_USER']}:{ENV['CAP_PASSWORD']}".encode()).decode()
-    req.add_header("Authorization", f"Basic {token}")
-    with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
-        return resp.status, resp.read().decode("utf-8", "replace")
+def inform(sim, number="13"):
+    if not sim:
+        sys.exit("a CAP sends an inform when something happens, and has no command to send one. To see one arrive, "
+                 "restart the CAP (capStarted), or stop its MQTT broker (mqttDisconnected). "
+                 "`inform --sim` sends one from the simulator.")
+    cmd = ["docker", "compose", "exec", "-T", "smartreader-snmpv3-sim", "snmpinform", *v3_args(),
+           "zabbix-snmptraps:1162", "", f"{ROOT}.0.{number}", f"{ROOT}.2.11.4.0", "s", "simulated value",
+           f"{ROOT}.2.11.5.0", "s", "simulated subject"]
+    out = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True)
+    print(f"simulator INFORM {number}:", "acknowledged" if out.returncode == 0 else out.stderr.strip())
+    sys.exit(out.returncode)
 
 
 if __name__ == "__main__":
@@ -157,6 +142,6 @@ if __name__ == "__main__":
     elif action == "check":
         check(sim)
     elif action == "inform":
-        inform(sim)
+        inform(sim, next((a for a in sys.argv[2:] if a.isdigit()), "13"))
     else:
         print(__doc__)

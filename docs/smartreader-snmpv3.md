@@ -1,9 +1,11 @@
-# SNMPv3 from SmartReader (experimental)
+# SNMPv3 from SmartReader
 
-> **Experimental.** SmartReader is getting its own SNMPv3 agent, but **no released SmartReader CAP ships it
-> yet**. Today only a SmartReader test build has it. Its objects sit under a **provisional root** that will
-> move when the final one is allocated, and their layout may change before release. Until a release ships
-> the agent, try this part of the lab with the **simulator** described below.
+> SmartReader's CAP has its own SNMPv3 agent (SmartReader issues #665 to #675), documented in the SmartReader
+> repository: the operator guide `doc-smartreader-md/smartreader-r700/features/snmp.md` and the object list
+> `docs/Snmp/MIB-REFERENCE.md`. Its objects sit under a **provisional root** that moves when Impinj allocates the
+> final one; the template follows the macro `{$SR.SNMP.ROOT}`, so that is one macro change (plus the trap keys).
+> No reader has run the final layout yet: try this part of the lab with the **simulator** described below, which
+> answers with the same objects.
 >
 > Nothing here changes how the lab monitors the R700 itself. The reader's own agent is still polled over
 > SNMP v2c and still sends v2c traps, exactly as in the [README](../README.md) and
@@ -21,8 +23,10 @@
 
 The lab adds three things, all off unless `.env` turns them on:
 
-- **A template, *SmartReader CAP by SNMPv3 (experimental)*,** with 32 items, an antenna discovery rule (23
-  item prototypes and a trigger prototype per port), a trap item for SmartReader's informs and 13 triggers. Every SmartReader OID is written relative to the macro `{$SR.SNMP.ROOT}`, so the
+- **A template, *SmartReader CAP by SNMPv3*,** with about 40 items, an antenna discovery rule (23
+  item prototypes and a trigger prototype per port), a component discovery rule (the CAP's status overview: state
+  and detail per component, and a trigger prototype for a component in error), one trap item and trigger for each
+  of the main informs plus a catch-all, and 20 triggers, one of which is the "no SNMP data" alarm that stands in for "CAP is down". Every SmartReader OID is written relative to the macro `{$SR.SNMP.ROOT}`, so the
   final root needs one macro change, not a new template.
 - **A third interface on the reader's host.** It uses SNMPv3 on `READER_HOST:1161`, next to the v2c interface
   on port 161 and the trap-only interface.
@@ -133,14 +137,13 @@ No reader is involved. You need the lab running ([README](../README.md), quick s
    links every SNMP item to its main (v2c) one, so `provision.py` creates the SNMPv3 items disabled, moves
    them to the SNMPv3 interface, enables them there and asks for a first check.
 
-5. **An INFORM from the CAP** (test build):
+5. **An INFORM from the CAP.** A CAP sends one when something happens: restart it to see `capStarted`, or stop
+   its MQTT broker to see `mqttDisconnected`. There is no command to make it send one. The simulator can send any
+   notification by number (see the notification list in the MIB reference):
 
    ```bash
-   python smartreader_snmpv3.py inform
+   python smartreader_snmpv3.py inform --sim 13     # thresholdCrossed
    ```
-
-   The CAP sends it with the user configured on its SNMP Monitoring page, so the lab passes only the trap
-   receiver's address and port.
 
    On Docker Desktop it arrives from `172.31.67.1`, like the reader's v2c traps, so it lands on the
    trap-only interface. There *Trap: SmartReader SNMPv3 notification* matches it before *Trap: other* can.
@@ -151,20 +154,27 @@ No reader is involved. You need the lab running ([README](../README.md), quick s
 port 1161. The template is also published for import: [templates/zbx_smartreader_cap_snmpv3.yaml](../templates/zbx_smartreader_cap_snmpv3.yaml)
 (see [Import the template](#import-the-template)).
 
-| Subtree | Holds |
+| Subtree (under `{ROOT}.2`) | Holds |
 |---|---|
-| `{ROOT}.2` | CAP health |
-| `{ROOT}.3` | The agent's counters |
-| `{ROOT}.4` | A synthetic 25-row table the test build carries to size walks; not polled |
-| `{ROOT}.5.1` | **Antenna table**, one row per port: `show rfid stat` figures and SmartReader's antenna settings |
-| `{ROOT}.5.2` | The reader's RFID status and when its statistics were reset |
-| `{ROOT}.5.3` | Age and outcome of the latest RFID statistics collection |
+| `.1` | CAP and reader OS health: versions, uptimes, CPU, memory, disk, temperatures, `eth0` counters |
+| `.2` | The reader: lifecycle, REST health, model, serial number, MAC, RFID administrative and operational status |
+| `.3` | Outputs: MQTT, HTTP webhook, socket server, informs sent, failed and dropped |
+| `.4.1` | **Component table**, one row per item of the CAP's status overview (state and detail) |
+| `.5.1` | **Antenna table**, one row per port: `show rfid stat` figures and SmartReader's antenna settings |
+| `.6`, `.7`, `.8` | GPIO, firmware images, name/value rows for keys without a typed object (not polled) |
+| `.9.2` | Age and outcome of the latest collection of each status group |
+| `.10` | The agent's counters |
 
 The RFID values come from the CAP's reader-status collector, which reads RShell `show rfid stat` every 60 s
 while the agent runs. An SNMP request reads the collector's latest snapshot and never makes the CAP talk
 to the reader.
 
 ### Item keys and values read in the tests
+
+> The table below was read on 2026-10-13 from the SmartReader SNMPv3 test build, **before the layout in the MIB
+> reference was final**. The item keys are the template's; the OIDs and the health indexes it shows are the test
+> build's. The template now polls the OIDs of `docs/Snmp/MIB-REFERENCE.md`. It was checked against the simulator
+> on 2026-10-16: every item answers, both discovery rules find their rows, and each inform reaches its own trap item.
 
 Every key was read over SNMPv3 in one run, on 2026-10-13 18:32:53 UTC:
 
@@ -616,7 +626,7 @@ or later.
    | Authentication protocol, passphrase | As configured on the agent, for example SHA256 |
    | Privacy protocol, passphrase | As configured on the agent, for example AES128 |
 
-3. Link **SmartReader CAP by SNMPv3 (experimental)** to the host.
+3. Link **SmartReader CAP by SNMPv3** to the host.
 4. **If the host also polls the reader's own agent** (SNMP v2c on port 161, as this lab's host does): Zabbix
    links every SNMP item of the template to the host's *main* SNMP interface. Set the SNMPv3 interface on
    each of the template's items on that host, or give the CAP a host of its own.

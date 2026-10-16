@@ -1,4 +1,4 @@
-# SmartReader CAP by SNMPv3 (experimental) - Zabbix 7.0 template
+# SmartReader CAP by SNMPv3 - Zabbix 7.0 template
 #
 # Import: Data collection > Templates > Import. Then give the host an SNMP interface with
 #   SNMPv3, port 1161, security level authPriv, and the agent's USM user, protocols and passphrases.
@@ -6,27 +6,237 @@
 # SNMPv3 interface: Zabbix links them to the host's main SNMP interface.
 #
 # Collects the CAP's health, the agent's counters, the reader's RFID statistics and, through low-level
-# discovery, one set of items per antenna port (`show rfid stat` figures and SmartReader's antenna settings).
+# discovery, one set of items per antenna port and per CAP component, plus a trap item and a trigger for the main
+# informs of SMARTREADER-MIB. The CAP admin password and the reader's root password are not needed.
 #
-# EXPERIMENTAL: no released SmartReader CAP ships the agent yet, and its OIDs sit under a provisional root.
-# The polled OIDs follow {$SR.SNMP.ROOT}; the trap item's key spells the provisional root out and has to be
-# edited along with the macro when the final root is allocated.
+# The polled OIDs follow {$SR.SNMP.ROOT} (provisional, under Net-SNMP's netSnmpPlaypen, until Impinj allocates the
+# arc). The trap items' keys spell the provisional root out and have to be edited along with the macro.
+# Objects: docs/Snmp/MIB-REFERENCE.md in https://github.com/suporterfid/smartreader
 # Source of truth: provision.py in https://github.com/suporterfid/smartreader-zabbix-lab
 zabbix_export:
   version: '7.0'
   template_groups:
-    - uuid: d4080a0ddba9415f9d2fb2fd982960fd
+    - uuid: ce535d7235794be1a5a6e52a1b9855a8
       name: Templates/SmartReader
   templates:
-    - uuid: 0abafe92e6bd40b497eb8dd45446567c
+    - uuid: f4f295c94b9343e6bd1ae3ef5374900e
       template: 'SmartReader CAP by SNMPv3'
-      name: 'SmartReader CAP by SNMPv3 (experimental)'
-      description: 'EXPERIMENTAL. SmartReader CAP health from the CAP''s own SNMPv3 agent (authPriv, read-only): CPU, memory, disk, temperatures, uptimes, MQTT, agent counters and SNMPv3 informs. Needs a SmartReader CAP that ships the agent; the object layout and root are provisional. The interface is SNMPv3 on UDP 1161.'
+      name: 'SmartReader CAP by SNMPv3'
+      description: 'SmartReader CAP health from the CAP''s own SNMPv3 agent (authPriv, read-only): CPU, memory, disk, temperatures, uptimes, MQTT, the antennas and components (low-level discovery), the agent''s counters and SmartReader''s SNMPv3 informs. The CAP admin password and the reader''s root password are not needed. The interface is SNMPv3 on UDP 1161. The OIDs sit under a provisional root until Impinj allocates the arc.'
       groups:
         - name: Templates/SmartReader
       items:
-        - uuid: b9bbf2ac21c94cf8b3d0ff562b7cc0aa
-          name: 'Trap: SmartReader SNMPv3 notification'
+        - uuid: 5c5a944538414e1596f2e38b93132690
+          name: 'Trap: capStarted'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)1(\D|$)|capStarted"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: capStarted
+          triggers:
+            - uuid: 7fd919a0d57b43ffbf9667aa8b1124c8
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)1(\D|$)|capStarted"],15m)=0'
+              name: 'SmartReader CAP started (inform)'
+              priority: INFO
+              description: 'Raised for 15 minutes after the inform capStarted arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: 595d6b2593724c2f8f171213d921aa39
+          name: 'Trap: mqttDisconnected'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)3(\D|$)|mqttDisconnected"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: mqttDisconnected
+          triggers:
+            - uuid: 499dad4ce47a4a44ae2a2a4ff943d788
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)3(\D|$)|mqttDisconnected"],15m)=0'
+              name: 'SmartReader CAP lost its MQTT broker (inform)'
+              priority: WARNING
+              description: 'Raised for 15 minutes after the inform mqttDisconnected arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: dd2d38226314490eb6cd5a9c0cb6a247
+          name: 'Trap: mqttConnectFailed'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)4(\D|$)|mqttConnectFailed"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: mqttConnectFailed
+          triggers:
+            - uuid: b90e2dabb3d14a44b3fc14dc6c264ae5
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)4(\D|$)|mqttConnectFailed"],15m)=0'
+              name: 'SmartReader CAP cannot connect to its MQTT broker (inform)'
+              priority: WARNING
+              description: 'Raised for 15 minutes after the inform mqttConnectFailed arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: dd795315e2c34079bc3d385ba7790817
+          name: 'Trap: readerLifecycleFault'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)7(\D|$)|readerLifecycleFault"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: readerLifecycleFault
+          triggers:
+            - uuid: 28b4891d1c1045aa822b913866fed809
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)7(\D|$)|readerLifecycleFault"],15m)=0'
+              name: 'SmartReader CAP cannot work with the reader (inform)'
+              priority: HIGH
+              description: 'Raised for 15 minutes after the inform readerLifecycleFault arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: 6b833e96902f4628ae7a7ac3408f0dbe
+          name: 'Trap: readerRestUnhealthy'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)9(\D|$)|readerRestUnhealthy"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: readerRestUnhealthy
+          triggers:
+            - uuid: 4d22e71fd5114d33ab8f85fc17080098
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)9(\D|$)|readerRestUnhealthy"],15m)=0'
+              name: 'Reader REST API unhealthy (inform)'
+              priority: HIGH
+              description: 'Raised for 15 minutes after the inform readerRestUnhealthy arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: d9e899d3abfa4a03be0d5face1b3b864
+          name: 'Trap: networkLost'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)11(\D|$)|networkLost"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: networkLost
+          triggers:
+            - uuid: bf564838e19e49dbb86a658ad3ca8729
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)11(\D|$)|networkLost"],15m)=0'
+              name: 'Reader lost its network (inform)'
+              priority: HIGH
+              description: 'Raised for 15 minutes after the inform networkLost arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: ea318943247a4119a0d3c52d49285fee
+          name: 'Trap: thresholdCrossed'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)13(\D|$)|thresholdCrossed"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: thresholdCrossed
+          triggers:
+            - uuid: 45f8313e134146f083ab4991acd45d74
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)13(\D|$)|thresholdCrossed"],15m)=0'
+              name: 'Reader CPU, memory, disk or temperature over its limit (inform)'
+              priority: WARNING
+              description: 'Raised for 15 minutes after the inform thresholdCrossed arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: 5ab13a74ec824404a4f007c47ac72260
+          name: 'Trap: certificateExpiring'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)15(\D|$)|certificateExpiring"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: certificateExpiring
+          triggers:
+            - uuid: 5d85e30a49704b4091fa7b5a57da5f6f
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)15(\D|$)|certificateExpiring"],15m)=0'
+              name: 'SmartReader certificate expires in under 30 days (inform)'
+              priority: WARNING
+              description: 'Raised for 15 minutes after the inform certificateExpiring arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: 92ae6b4ba47d4cdfb1e03c0cc554bf1b
+          name: 'Trap: certificateExpired'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)16(\D|$)|certificateExpired"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: certificateExpired
+          triggers:
+            - uuid: 71339a5362064139b661c57d82b39191
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)16(\D|$)|certificateExpired"],15m)=0'
+              name: 'SmartReader certificate expired (inform)'
+              priority: AVERAGE
+              description: 'Raised for 15 minutes after the inform certificateExpired arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: c72059344de24be7abeab72863d34af8
+          name: 'Trap: antennaStatusChanged'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)17(\D|$)|antennaStatusChanged"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: antennaStatusChanged
+          triggers:
+            - uuid: b982557d32694cb2b6140a6cb4bddb74
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)17(\D|$)|antennaStatusChanged"],15m)=0'
+              name: 'Antenna operational status changed (inform)'
+              priority: WARNING
+              description: 'Raised for 15 minutes after the inform antennaStatusChanged arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: d4416e4347324bfba2615cc1810d62e7
+          name: 'Trap: bootReasonChanged'
+          type: SNMP_TRAP
+          key: 'snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)18(\D|$)|bootReasonChanged"]'
+          delay: '0'
+          value_type: LOG
+          trends: '0'
+          tags:
+            - tag: component
+              value: traps
+            - tag: notification
+              value: bootReasonChanged
+          triggers:
+            - uuid: ecaaf4863b9e49928b10468fcc52a48b
+              expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["(netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\.)18(\D|$)|bootReasonChanged"],15m)=0'
+              name: 'Reader booted again (inform)'
+              priority: INFO
+              description: 'Raised for 15 minutes after the inform bootReasonChanged arrives; close it manually once handled.'
+              manual_close: 'YES'
+        - uuid: 68017f8b841b4178b1bf98c1f51085b0
+          name: 'Trap: SmartReader SNMPv3 notification (any)'
           type: SNMP_TRAP
           key: 'snmptrap["netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\."]'
           delay: '0'
@@ -36,18 +246,19 @@ zabbix_export:
             - tag: component
               value: traps
           triggers:
-            - uuid: 55bf879439ae4394be5349eb3bfe824c
+            - uuid: 09cdf175a69f43bd920eff177dac909c
               expression: 'nodata(/SmartReader CAP by SNMPv3/snmptrap["netSnmpPlaypen\.7\.0\.|8072\.9999\.9999\.7\.0\."],15m)=0'
               name: 'SmartReader SNMPv3 notification received'
               priority: INFO
               description: 'Raised for 15 minutes after an inform arrives; close it manually once handled.'
               manual_close: 'YES'
-        - uuid: 6b5dcaa2bb0646168096587088c078ed
+        - uuid: 0a21f5dee4d04baba5eee16bb3e47de1
           name: 'SNMPv3 agent uptime'
           type: SNMP_AGENT
           snmp_oid: 1.3.6.1.2.1.1.3.0
           key: sr3.agent.uptime
           value_type: FLOAT
+          status: DISABLED
           units: uptime
           preprocessing:
             - type: MULTIPLIER
@@ -57,45 +268,73 @@ zabbix_export:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 1be4bf559b1345dd86b96e921eb0e2ae
+            - uuid: 05addc95b047418eb4b978acc6ff8a77
               expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
               name: 'SmartReader SNMPv3 agent not answering'
               priority: AVERAGE
-        - uuid: a6816d0d21674308a862690b9a05bac6
+              description: 'The "CAP is down" alarm: when SmartReader stops, so does its agent. Keep the ICMP check of the reader template as well.'
+        - uuid: f9dcf9ddce5e45659c51f10f4c4c0373
           name: 'Antenna table (walk)'
           type: SNMP_AGENT
-          snmp_oid: 'walk[{$SR.SNMP.ROOT}.5.1.1]'
+          snmp_oid: 'walk[{$SR.SNMP.ROOT}.2.5.1.1]'
           key: sr3.antennas.walk
           history: 1h
           value_type: TEXT
           trends: '0'
+          status: DISABLED
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: e62ddce9510d4568b77addffcd80152e
+        - uuid: cd5c3a58b6ae4d9090aafd3e0d9ba4c1
           name: 'CAP application uptime'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.5.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.2.0'
           key: sr3.app.uptime
           value_type: FLOAT
+          status: DISABLED
           units: uptime
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: ca887fd062df4dd4ba88e94e463cc29d
+            - uuid: 600ddc0acc4a4166a32113350696677a
               expression: 'last(/SmartReader CAP by SNMPv3/sr3.app.uptime)<600'
               name: 'CAP restarted (SNMPv3)'
               priority: WARNING
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: 8df907a372d54db9a2fbbb5c0938cfb5
+        - uuid: 1b0ba27862854583afc77829e1bd5d13
+          name: 'CAP version'
+          type: SNMP_AGENT
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.1.0'
+          key: sr3.cap.version
+          delay: 1h
+          value_type: CHAR
+          trends: '0'
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+        - uuid: 71badc4602b14ffe8190c8903d90efcd
+          name: 'Component table (walk)'
+          type: SNMP_AGENT
+          snmp_oid: 'walk[{$SR.SNMP.ROOT}.2.4.1.1]'
+          key: sr3.components.walk
+          history: 1h
+          value_type: TEXT
+          trends: '0'
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+        - uuid: 21bc8e40d64a48cfbc8883bbddbff8f1
           name: 'CAP process CPU'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.1.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.4.0'
           key: sr3.cpu
           value_type: FLOAT
+          status: DISABLED
           units: '%'
           preprocessing:
             - type: MULTIPLIER
@@ -104,12 +343,13 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 5fabaeabc3d246a69264ddbdf1d5cbf2
+        - uuid: 4f4d4c051bb44b1b8cee642f9d4e151e
           name: 'CPU temperature'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.6.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.7.0'
           key: sr3.cpu.temp
           value_type: FLOAT
+          status: DISABLED
           units: °C
           preprocessing:
             - type: MULTIPLIER
@@ -118,12 +358,13 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: c690a88ec21c47f0bcf9bd59acf2eed7
+        - uuid: 1373fe7ffce34a84aaa540211b517c96
           name: 'CPU temperature limit'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.7.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.8.0'
           key: sr3.cpu.temp.max
           value_type: FLOAT
+          status: DISABLED
           units: °C
           preprocessing:
             - type: MULTIPLIER
@@ -132,12 +373,13 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: c0f97fa0df91463d83f3ceb0772f00f2
+        - uuid: f6a209ff2bda4de591acd5581990d07d
           name: 'CPU temperature peak'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.8.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.9.0'
           key: sr3.cpu.temp.peak
           value_type: FLOAT
+          status: DISABLED
           units: °C
           preprocessing:
             - type: MULTIPLIER
@@ -146,12 +388,13 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: e3e4cf91ceb9434f829f764310edff40
+        - uuid: 273c5dc21208496aacf33555eab01c39
           name: 'SNMPv3 decryption errors per second'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.3.7.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.10.7.0'
           key: sr3.decryption.errors
           value_type: FLOAT
+          status: DISABLED
           units: rps
           preprocessing:
             - type: CHANGE_PER_SECOND
@@ -160,12 +403,13 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 47f4677b2eaf4aa8981ba7146c335673
+        - uuid: 0c9ca2a23d584b3180d4b23500ca77f5
           name: 'CAP file system used'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.3.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.6.0'
           key: sr3.disk.pused
           value_type: FLOAT
+          status: DISABLED
           units: '%'
           preprocessing:
             - type: MULTIPLIER
@@ -175,24 +419,25 @@ zabbix_export:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 9847cfe570474da09af87da01c25924b
+            - uuid: 4401920bf2564cbbb9d4f088ff682d3f
               expression: 'last(/SmartReader CAP by SNMPv3/sr3.disk.pused)>{$SR.DISK.MAX}'
               name: 'CAP file system above {$SR.DISK.MAX}% (SNMPv3)'
               priority: WARNING
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: 1289d12b27e5487491ddb5b2703a8cf7
+        - uuid: 23c01af23649455386ab84f2846e6a84
           name: 'SNMPv3 engine boots'
           type: SNMP_AGENT
           snmp_oid: 1.3.6.1.6.3.10.2.1.2.0
           key: sr3.engine.boots
           delay: 5m
+          status: DISABLED
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 91bc25a79e65443c9f9ab0b258fad1a5
+            - uuid: a17e06171de14a58843a692f31a9d58b
               expression: 'change(/SmartReader CAP by SNMPv3/sr3.engine.boots)>0'
               name: 'SmartReader SNMP engine restarted'
               priority: INFO
@@ -200,7 +445,7 @@ zabbix_export:
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: ee5fb8b8ac694ada9863f5f6c55b4c2d
+        - uuid: c0d36f6b22aa49e2a54839ac64b9d4f2
           name: 'SNMPv3 engine ID'
           type: SNMP_AGENT
           snmp_oid: 1.3.6.1.6.3.10.2.1.1.0
@@ -208,15 +453,42 @@ zabbix_export:
           delay: 1h
           value_type: CHAR
           trends: '0'
+          status: DISABLED
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 71f0a6a9a20344039a56ee34c7cfc1c5
+        - uuid: 295afb1f96b74a34ac8c3bcbc1a0e4c2
+          name: 'SmartReader informs dropped'
+          type: SNMP_AGENT
+          snmp_oid: '{$SR.SNMP.ROOT}.2.3.15.0'
+          key: sr3.informs.dropped
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+          triggers:
+            - uuid: aff328fbb2584caaa2972a86f5fab9d9
+              expression: 'change(/SmartReader CAP by SNMPv3/sr3.informs.dropped)>0'
+              name: 'SmartReader informs are being dropped'
+              priority: WARNING
+              description: 'An inform target was down long enough for the CAP''s queue to fill.'
+              manual_close: 'YES'
+        - uuid: b75afa64ac7446279a1b7ae874752cb0
+          name: 'SmartReader informs failed'
+          type: SNMP_AGENT
+          snmp_oid: '{$SR.SNMP.ROOT}.2.3.14.0'
+          key: sr3.informs.failed
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+        - uuid: a4cc6123cfa34fb8a6ef0b74447ea18d
           name: 'CAP process memory'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.2.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.5.0'
           key: sr3.memory
           value_type: FLOAT
+          status: DISABLED
           units: B
           preprocessing:
             - type: MULTIPLIER
@@ -225,107 +497,72 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: f2b29420b27044ef8be6ed18a4354435
+        - uuid: 00f6ab9818514534bbe8b96eb451bb3a
           name: 'CAP connected to MQTT broker'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.9.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.3.1.0'
           key: sr3.mqtt.connected
+          status: DISABLED
           valuemap:
             name: Up/Down
+          preprocessing:
+            - type: JAVASCRIPT
+              parameters:
+                - 'return value == 1 ? 1 : 0;'
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 40627e75ff00475688333c1783cf777a
+            - uuid: 3208b0172d344a1aa614124b9336c6ac
               expression: 'max(/SmartReader CAP by SNMPv3/sr3.mqtt.connected,5m)=0'
               name: 'CAP lost the MQTT broker (SNMPv3)'
               priority: HIGH
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: ce45d7230c4d4b91a3d1c6b0961f1fc6
+        - uuid: 6271726e3df84712bced0bd28f646b04
           name: 'CAP MQTT messages pending'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.10.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.3.2.0'
           key: sr3.mqtt.pending
+          status: DISABLED
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 701675ab2777461f81665e048b2c2574
+            - uuid: f415e1f45ed04df495ba66f22316ead7
               expression: 'min(/SmartReader CAP by SNMPv3/sr3.mqtt.pending,10m)>{$SR.PENDING.MAX}'
               name: 'CAP MQTT messages backing up (SNMPv3)'
               priority: AVERAGE
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: 78e8a7f10f184edc9e4d06b1c2f1b91a
+        - uuid: ab76a474b48d48e9a44934c4f50794cc
           name: 'Reader OS uptime'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.4.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.1.3.0'
           key: sr3.os.uptime
           value_type: FLOAT
+          status: DISABLED
           units: uptime
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 42141663c5fc4c0b961746ed2368f2c2
+            - uuid: fcd5ea1d4eaa42f4b587eecc17e011fa
               expression: 'last(/SmartReader CAP by SNMPv3/sr3.os.uptime)<600'
               name: 'Reader rebooted (OS uptime via SNMPv3)'
               priority: WARNING
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: 89b3ae1b744c4d2b9be00152a9f14069
-          name: 'CAP CPU, % of one core'
-          type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.21.0'
-          key: sr3.process.cpu
-          value_type: FLOAT
-          units: '%'
-          preprocessing:
-            - type: CHANGE_PER_SECOND
-              parameters:
-                - ''
-            - type: MULTIPLIER
-              parameters:
-                - '0.1'
-          tags:
-            - tag: component
-              value: smartreader-snmpv3
-        - uuid: c849a550d5c747b287e8317a3eba972e
-          name: 'CAP managed heap'
-          type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.22.0'
-          key: sr3.process.heap
-          units: B
-          tags:
-            - tag: component
-              value: smartreader-snmpv3
-        - uuid: ce7d12e5292d4c979fac6b251dc0547a
-          name: 'CAP resident memory'
-          type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.20.0'
-          key: sr3.process.rss
-          units: B
-          tags:
-            - tag: component
-              value: smartreader-snmpv3
-        - uuid: e8f8155bf84447a39c2fa4ae8878a03b
-          name: 'CAP threads'
-          type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.2.23.0'
-          key: sr3.process.threads
-          tags:
-            - tag: component
-              value: smartreader-snmpv3
-        - uuid: da89a4c1380e4031b16a2e49759d2aaf
+        - uuid: 3c3d3e0e9a3f4d5199f52ac804c3be88
           name: 'SNMPv3 requests dropped by the rate limit per second'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.3.11.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.10.11.0'
           key: sr3.rate.limited
           value_type: FLOAT
+          status: DISABLED
           units: rps
           preprocessing:
             - type: CHANGE_PER_SECOND
@@ -334,40 +571,91 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 064702b6edd64487af9a7400b376fd63
+        - uuid: 6b850de5382f4d35b67c5b0dd87c5b7f
           name: 'Reader administrative status'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.5.2.1.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.2.20.0'
           key: sr3.reader.admin
+          status: DISABLED
           valuemap:
             name: 'SmartReader RFID status'
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 347f7ae88d1f4f07960620cfc14ebc4e
+        - uuid: dd2f65109392409a90334581848997b2
+          name: 'Reader firmware version'
+          type: SNMP_AGENT
+          snmp_oid: '{$SR.SNMP.ROOT}.2.2.6.0'
+          key: sr3.reader.firmware
+          delay: 1h
+          value_type: CHAR
+          trends: '0'
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+        - uuid: cd7ef8580165432f8ad53612e2a39cab
+          name: 'Reader MAC address'
+          type: SNMP_AGENT
+          snmp_oid: '{$SR.SNMP.ROOT}.2.2.9.0'
+          key: sr3.reader.mac
+          delay: 1h
+          value_type: CHAR
+          trends: '0'
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+        - uuid: c9fd441acf9440ca985ed5acc4749c54
+          name: 'Reader model'
+          type: SNMP_AGENT
+          snmp_oid: '{$SR.SNMP.ROOT}.2.2.7.0'
+          key: sr3.reader.model
+          delay: 1h
+          value_type: CHAR
+          trends: '0'
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+        - uuid: 7b92a43e3866495e982e20921877accf
           name: 'Reader operational status'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.5.2.2.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.2.21.0'
           key: sr3.reader.oper
+          status: DISABLED
           valuemap:
             name: 'SmartReader RFID status'
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 1f03daa1770944a4bbf9eb1e819e263f
+            - uuid: c61395b77d1e4b55af87033255b7f9e1
               expression: 'last(/SmartReader CAP by SNMPv3/sr3.reader.oper)<>1'
               name: 'Reader RFID not operational (SNMPv3)'
               priority: HIGH
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: dea143834a314578810e6a5c4a43afaf
+        - uuid: df6f1b159ca24694840025f22bdd1c5f
+          name: 'Reader serial number'
+          type: SNMP_AGENT
+          snmp_oid: '{$SR.SNMP.ROOT}.2.2.8.0'
+          key: sr3.reader.serial
+          delay: 1h
+          value_type: CHAR
+          trends: '0'
+          status: DISABLED
+          tags:
+            - tag: component
+              value: smartreader-snmpv3
+        - uuid: 6bb0c4e54ad54ef2a52e35b2cc906f1d
           name: 'SNMPv3 requests per second'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.3.1.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.10.1.0'
           key: sr3.requests
           value_type: FLOAT
+          status: DISABLED
           units: rps
           preprocessing:
             - type: CHANGE_PER_SECOND
@@ -376,59 +664,63 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 0457214d04d44f8086972243c5a6d580
+        - uuid: b3c446f2d1fd41438b16b768202db168
           name: 'RFID statistics age'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.5.3.1.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.9.2.1.4.1'
           key: sr3.rfid.age
           value_type: FLOAT
+          status: DISABLED
           units: s
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 3432a70c3a3941b58f75cb0921b49bc2
+            - uuid: e14f3af3f0b94b41807329ac9f66170d
               expression: 'last(/SmartReader CAP by SNMPv3/sr3.rfid.age)>300'
               name: 'SmartReader RFID statistics older than 5 minutes'
               priority: WARNING
-              description: 'The CAP collects them every 60 s; see the collection status item for why.'
+              description: 'The CAP collects them every minute; see the collection status item for why.'
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: af0de731aeda4651b37ff71464ae1174
+        - uuid: 8010e435faf24900b9d101514d5a982e
           name: 'RFID statistics collection'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.5.3.2.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.9.2.1.3.1'
           key: sr3.rfid.collection
+          status: DISABLED
           valuemap:
             name: 'SmartReader collection status'
           tags:
             - tag: component
               value: smartreader-snmpv3
           triggers:
-            - uuid: 23e6c05fd6284909888a9285e418b630
+            - uuid: b13b716dde414a9da98d790e6608a92f
               expression: 'count(/SmartReader CAP by SNMPv3/sr3.rfid.collection,10m,"eq","1")=0'
               name: 'SmartReader cannot collect RFID statistics'
               priority: WARNING
               dependencies:
                 - name: 'SmartReader SNMPv3 agent not answering'
                   expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-        - uuid: 6c92e6d8151646dcab5f28d50b68740f
+        - uuid: 0bfbf8a7a7244bc59eee794bc53dbfcd
           name: 'RFID statistics since last reset'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.5.2.3.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.2.22.0'
           key: sr3.rfid.reset
           value_type: FLOAT
+          status: DISABLED
           units: uptime
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 8d3aea5605e64e668b28f3d239f31fd0
+        - uuid: 52bca9e672ce477daa24e75c77ca2cc0
           name: 'SNMPv3 SET requests refused per second'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.3.12.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.10.13.0'
           key: sr3.set.refused
           value_type: FLOAT
+          status: DISABLED
           units: rps
           preprocessing:
             - type: CHANGE_PER_SECOND
@@ -437,7 +729,7 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 7bd5958e3f2344fbba54a2f615843348
+        - uuid: c6b4661a0b004a15aa88a4afaa89ff95
           name: 'SNMPv3 agent description'
           type: SNMP_AGENT
           snmp_oid: 1.3.6.1.2.1.1.1.0
@@ -445,10 +737,11 @@ zabbix_export:
           delay: 1h
           value_type: CHAR
           trends: '0'
+          status: DISABLED
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: eb68391505004478a6d627def57f792c
+        - uuid: 64e8785175034fa5b815312a7bb9178f
           name: 'SNMPv3 agent object ID'
           type: SNMP_AGENT
           snmp_oid: 1.3.6.1.2.1.1.2.0
@@ -456,15 +749,17 @@ zabbix_export:
           delay: 1h
           value_type: CHAR
           trends: '0'
+          status: DISABLED
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 400812f761d04b0ea4622bec553c1f14
+        - uuid: 9dab4a3324124dfc8b7ece239bb1bf42
           name: 'SNMPv3 requests outside the time window per second'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.3.8.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.10.8.0'
           key: sr3.time.window
           value_type: FLOAT
+          status: DISABLED
           units: rps
           preprocessing:
             - type: CHANGE_PER_SECOND
@@ -473,12 +768,13 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 578c430814534808b0889116ee98ae4c
+        - uuid: a0e0860970854bb291d26458840f0931
           name: 'SNMPv3 unknown user names per second'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.3.4.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.10.4.0'
           key: sr3.unknown.users
           value_type: FLOAT
+          status: DISABLED
           units: rps
           preprocessing:
             - type: CHANGE_PER_SECOND
@@ -487,12 +783,13 @@ zabbix_export:
           tags:
             - tag: component
               value: smartreader-snmpv3
-        - uuid: 98229ddae45f4de4a43815b2efa0cd5b
+        - uuid: 661e73fa8ed5425a966c591f7ac3ae8e
           name: 'SNMPv3 wrong digests (authentication failures) per second'
           type: SNMP_AGENT
-          snmp_oid: '{$SR.SNMP.ROOT}.3.6.0'
+          snmp_oid: '{$SR.SNMP.ROOT}.2.10.6.0'
           key: sr3.wrong.digests
           value_type: FLOAT
+          status: DISABLED
           units: rps
           preprocessing:
             - type: CHANGE_PER_SECOND
@@ -502,14 +799,14 @@ zabbix_export:
             - tag: component
               value: smartreader-snmpv3
       discovery_rules:
-        - uuid: 2b58dd656d374500834979bdbabbbda1
+        - uuid: b13fbc7195ac4efdb6da788e1246acfc
           name: 'SmartReader antenna discovery'
           type: DEPENDENT
           key: sr3.antenna.discovery
           delay: '0'
           lifetime: 1d
           item_prototypes:
-            - uuid: 4f6670e8e80240178d5ec16a5054ffe2
+            - uuid: c1f037d05fd045a49fe560a3fd8b3553
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): administrative status'
               type: DEPENDENT
               key: 'sr3.antenna.admin[{#SNMPINDEX}]'
@@ -519,7 +816,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.2.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.2.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -528,7 +825,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 47b0ec7e39284d13b481167a57f41d8f
+            - uuid: 592f8bceed224b458df8789dcfdc8129
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): enabled in SmartReader'
               type: DEPENDENT
               key: 'sr3.antenna.enabled[{#SNMPINDEX}]'
@@ -538,7 +835,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.20.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.20.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -547,7 +844,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 5b5dda0c8ee940eb8860ba131a678610
+            - uuid: 6af09140065b44bdb3125af7dc55569d
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): time energized'
               type: DEPENDENT
               key: 'sr3.antenna.energized[{#SNMPINDEX}]'
@@ -557,7 +854,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.6.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.6.{#SNMPINDEX}'
                     - '0'
                 - type: MULTIPLIER
                   parameters:
@@ -569,7 +866,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 865b906578d743f5865f19f8d1a2a2ad
+            - uuid: 8d101773b7ec4966ad244d8213de3614
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): failed tag erases'
               type: DEPENDENT
               key: 'sr3.antenna.erases.failed[{#SNMPINDEX}]'
@@ -577,7 +874,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.19.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.19.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -586,7 +883,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 78579dff2ae44f0abcb690501fa35b88
+            - uuid: 4620af972cd44632b4d45d5bef494256
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): tag erases'
               type: DEPENDENT
               key: 'sr3.antenna.erases[{#SNMPINDEX}]'
@@ -594,7 +891,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.18.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.18.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -603,7 +900,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 7980494a84eb4e928b7544e95bef1339
+            - uuid: ada185a4c1d144529d9941ccd6a5eb95
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): failed inventories'
               type: DEPENDENT
               key: 'sr3.antenna.inventory.failed[{#SNMPINDEX}]'
@@ -611,7 +908,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.9.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.9.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -620,7 +917,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: fc0cbec943384b749b302b5e3048dabf
+            - uuid: f15bd575244344b9abe234f2c91d4eef
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): tags inventoried per second'
               type: DEPENDENT
               key: 'sr3.antenna.inventory.rate[{#SNMPINDEX}]'
@@ -630,7 +927,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.8.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.8.{#SNMPINDEX}'
                     - '0'
                 - type: CHANGE_PER_SECOND
                   parameters:
@@ -642,7 +939,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 937cc31ffb0f47d596eab04938a9d6e7
+            - uuid: ef80b5e0941f4259bba13b24b62b1bbe
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): tags inventoried'
               type: DEPENDENT
               key: 'sr3.antenna.inventory[{#SNMPINDEX}]'
@@ -650,7 +947,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.8.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.8.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -659,7 +956,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: f5b871c05be94916b648711a9574ce0d
+            - uuid: 01f2d036b3f9411f81a5ebe84cc37308
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): failed tag kills'
               type: DEPENDENT
               key: 'sr3.antenna.kills.failed[{#SNMPINDEX}]'
@@ -667,7 +964,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.17.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.17.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -676,7 +973,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 946bf9787d2a42648efb22e1db1a124e
+            - uuid: 40b8f23e85f94b239cfb5ea0bdfbda6a
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): tag kills'
               type: DEPENDENT
               key: 'sr3.antenna.kills[{#SNMPINDEX}]'
@@ -684,7 +981,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.16.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.16.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -693,7 +990,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: ba8815e839e841be8e4301e0df3c4db7
+            - uuid: c03bb51fd07140d6bb8046c5679587f9
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): failed tag locks'
               type: DEPENDENT
               key: 'sr3.antenna.locks.failed[{#SNMPINDEX}]'
@@ -701,7 +998,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.15.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.15.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -710,7 +1007,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 775f1f459a1540ed99f434dc6720edd4
+            - uuid: 6c912659a7874f398b9f79d8d9645fae
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): tag locks'
               type: DEPENDENT
               key: 'sr3.antenna.locks[{#SNMPINDEX}]'
@@ -718,7 +1015,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.14.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.14.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -727,7 +1024,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 12f988a775724e7aa7091d68e09b9ed6
+            - uuid: 41643cede5fb4fd789f56b4e50990c36
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): last noise level'
               type: DEPENDENT
               key: 'sr3.antenna.noise[{#SNMPINDEX}]'
@@ -736,7 +1033,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.5.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.5.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -745,7 +1042,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 8664d386ee834de3a911e69ddb73e191
+            - uuid: e8f14d4cc3b44ab5a041fe5fb679d982
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): operational status'
               type: DEPENDENT
               key: 'sr3.antenna.oper[{#SNMPINDEX}]'
@@ -755,7 +1052,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.3.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.3.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -764,7 +1061,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 11ca2b55f3af4d0297e04762bce87772
+            - uuid: ab132f4af0b34e1cbabf27e72ae418af
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): last power level'
               type: DEPENDENT
               key: 'sr3.antenna.power[{#SNMPINDEX}]'
@@ -774,7 +1071,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.4.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.4.{#SNMPINDEX}'
                     - '0'
                 - type: MULTIPLIER
                   parameters:
@@ -786,7 +1083,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: fb8fe8b66aa047b590e325752d7bc307
+            - uuid: 72b5abbf158c4fe287d455faa66a3b40
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): failed tag reads'
               type: DEPENDENT
               key: 'sr3.antenna.reads.failed[{#SNMPINDEX}]'
@@ -794,7 +1091,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.11.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.11.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -803,7 +1100,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: a3e559ebfc7446f39ce8a2fe495b916f
+            - uuid: cac9db2862d1459aa6e38496ae316264
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): tag reads'
               type: DEPENDENT
               key: 'sr3.antenna.reads[{#SNMPINDEX}]'
@@ -811,7 +1108,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.10.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.10.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -820,7 +1117,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: f1fe79be52dc47338c15a4bea8e0e739
+            - uuid: e489ba37208d47408573e8b93dabcde2
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): configured receive sensitivity'
               type: DEPENDENT
               key: 'sr3.antenna.rxsensitivity[{#SNMPINDEX}]'
@@ -830,7 +1127,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.23.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.23.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -839,7 +1136,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 2f61e334ba584fd9a3c6ce38ec58ab9e
+            - uuid: a531d014cf4648618333027824d9422c
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): configured transmit power'
               type: DEPENDENT
               key: 'sr3.antenna.txpower[{#SNMPINDEX}]'
@@ -849,7 +1146,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.22.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.22.{#SNMPINDEX}'
                     - '0'
                 - type: MULTIPLIER
                   parameters:
@@ -861,7 +1158,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 80c9787043e1484ab045edde64e26557
+            - uuid: 33c7f1353d914f1ba6df54e82464beeb
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): unique tags inventoried'
               type: DEPENDENT
               key: 'sr3.antenna.unique[{#SNMPINDEX}]'
@@ -869,7 +1166,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.7.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.7.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -878,7 +1175,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: bd4545e79cd143139b3f1b12f2c8c955
+            - uuid: 91d83321432d4d4b9896d01107f83d67
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): failed tag writes'
               type: DEPENDENT
               key: 'sr3.antenna.writes.failed[{#SNMPINDEX}]'
@@ -886,7 +1183,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.13.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.13.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -895,7 +1192,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: ffc730a5f97f47e0bff6bda3722e30bd
+            - uuid: a6cf201ac7974821b8e84926ba1511dc
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): tag writes'
               type: DEPENDENT
               key: 'sr3.antenna.writes[{#SNMPINDEX}]'
@@ -903,7 +1200,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.12.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.12.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -912,7 +1209,7 @@ zabbix_export:
                   value: '{#SNMPINDEX}'
                 - tag: component
                   value: smartreader-antenna
-            - uuid: 906b5edcd9504a5081e189d2cd0275e0
+            - uuid: 321948a8a5e241da980111f0f65d6ec6
               name: 'Antenna {#SNMPINDEX} ({#ZONE}): zone'
               type: DEPENDENT
               key: 'sr3.antenna.zone[{#SNMPINDEX}]'
@@ -922,7 +1219,7 @@ zabbix_export:
               preprocessing:
                 - type: SNMP_WALK_VALUE
                   parameters:
-                    - '{$SR.SNMP.ROOT}.5.1.1.21.{#SNMPINDEX}'
+                    - '{$SR.SNMP.ROOT}.2.5.1.1.21.{#SNMPINDEX}'
                     - '0'
               master_item:
                 key: sr3.antennas.walk
@@ -932,7 +1229,7 @@ zabbix_export:
                 - tag: component
                   value: smartreader-antenna
           trigger_prototypes:
-            - uuid: e17593e1034b4a498352cb7f8ba3a97d
+            - uuid: c16188acd2fa480a927854343f00305b
               expression: 'last(/SmartReader CAP by SNMPv3/sr3.antenna.oper[{#SNMPINDEX}])<>1 and last(/SmartReader CAP by SNMPv3/sr3.antenna.enabled[{#SNMPINDEX}])=1'
               name: 'Antenna {#SNMPINDEX} ({#ZONE}) is enabled in SmartReader but not operational'
               opdata: '{ITEM.LASTVALUE1}'
@@ -943,10 +1240,73 @@ zabbix_export:
             - type: SNMP_WALK_TO_JSON
               parameters:
                 - '{#ZONE}'
-                - '{$SR.SNMP.ROOT}.5.1.1.21'
+                - '{$SR.SNMP.ROOT}.2.5.1.1.21'
                 - '0'
                 - '{#CONFIGURED}'
-                - '{$SR.SNMP.ROOT}.5.1.1.20'
+                - '{$SR.SNMP.ROOT}.2.5.1.1.20'
+                - '0'
+        - uuid: e130994ebeec4036bdc3d065569651fe
+          name: 'SmartReader component discovery'
+          type: DEPENDENT
+          key: sr3.component.discovery
+          delay: '0'
+          lifetime: 1d
+          item_prototypes:
+            - uuid: 293af086eb2441f3838462c3aaea34e6
+              name: 'CAP component {#LABEL}: detail'
+              type: DEPENDENT
+              key: 'sr3.component.detail[{#SNMPINDEX}]'
+              delay: '0'
+              history: 7d
+              value_type: CHAR
+              trends: '0'
+              preprocessing:
+                - type: SNMP_WALK_VALUE
+                  parameters:
+                    - '{$SR.SNMP.ROOT}.2.4.1.1.5.{#SNMPINDEX}'
+                    - '0'
+              master_item:
+                key: sr3.components.walk
+              tags:
+                - tag: component
+                  value: smartreader-component
+                - tag: key
+                  value: '{#KEY}'
+            - uuid: 5ffe9b57945a43cf9e4efc5ff627ec53
+              name: 'CAP component {#LABEL}: state'
+              type: DEPENDENT
+              key: 'sr3.component.state[{#SNMPINDEX}]'
+              delay: '0'
+              valuemap:
+                name: 'SmartReader component state'
+              preprocessing:
+                - type: SNMP_WALK_VALUE
+                  parameters:
+                    - '{$SR.SNMP.ROOT}.2.4.1.1.4.{#SNMPINDEX}'
+                    - '0'
+              master_item:
+                key: sr3.components.walk
+              tags:
+                - tag: component
+                  value: smartreader-component
+                - tag: key
+                  value: '{#KEY}'
+              trigger_prototypes:
+                - uuid: 2536cc6dbed94d1fbc94c039fffb8804
+                  expression: 'last(/SmartReader CAP by SNMPv3/sr3.component.state[{#SNMPINDEX}])=3'
+                  name: 'CAP component {#LABEL} is in error'
+                  opdata: '{ITEM.LASTVALUE1}'
+                  priority: AVERAGE
+          master_item:
+            key: sr3.components.walk
+          preprocessing:
+            - type: SNMP_WALK_TO_JSON
+              parameters:
+                - '{#KEY}'
+                - '{$SR.SNMP.ROOT}.2.4.1.1.2'
+                - '0'
+                - '{#LABEL}'
+                - '{$SR.SNMP.ROOT}.2.4.1.1.3'
                 - '0'
       macros:
         - macro: '{$SR.DISK.MAX}'
@@ -955,11 +1315,11 @@ zabbix_export:
           value: '100'
         - macro: '{$SR.SNMP.ROOT}'
           value: 1.3.6.1.4.1.8072.9999.9999.7
-          description: 'Root of SmartReader''s objects (provisional)'
+          description: 'Root of SMARTREADER-MIB (provisional)'
         - macro: '{$SR.TEMP.MARGIN}'
           value: '5'
       valuemaps:
-        - uuid: f48f5636eae74d9fa3cc07e77fe72982
+        - uuid: 545f0fb393634267be77ad57be18afc6
           name: 'SmartReader collection status'
           mappings:
             - value: '0'
@@ -972,7 +1332,20 @@ zabbix_export:
               newvalue: 'paused: the reader rejects the CAP''s credentials'
             - value: '4'
               newvalue: error
-        - uuid: 77ec566d86bb4883b5c3cea4a291c940
+        - uuid: 4e9c185df4054bd5997adf3aa47b4b1a
+          name: 'SmartReader component state'
+          mappings:
+            - value: '1'
+              newvalue: OK
+            - value: '2'
+              newvalue: Warning
+            - value: '3'
+              newvalue: Error
+            - value: '4'
+              newvalue: 'Off'
+            - value: '5'
+              newvalue: Amber
+        - uuid: f623989a7f1b42bcbdba68f24f228e48
           name: 'SmartReader RFID status'
           mappings:
             - value: '1'
@@ -981,14 +1354,14 @@ zabbix_export:
               newvalue: disabled
             - value: '3'
               newvalue: other
-        - uuid: 74c368406d2e44e8b202bd3d6ac5e945
+        - uuid: ab9e05cb8cdd44cda1bee0ce1219b153
           name: 'SmartReader yes/no'
           mappings:
             - value: '1'
               newvalue: 'yes'
             - value: '2'
               newvalue: 'no'
-        - uuid: 6a893098181b49779102620a64fbd360
+        - uuid: 1224cfce28744ce788427cabf3fdcb12
           name: Up/Down
           mappings:
             - value: '0'
@@ -996,14 +1369,14 @@ zabbix_export:
             - value: '1'
               newvalue: Up
   triggers:
-    - uuid: 79a64c64ceaa4a6fb0852ba1f8d69b5b
+    - uuid: dc6d7e918d134bc29dd56e080c46a3be
       expression: 'last(/SmartReader CAP by SNMPv3/sr3.cpu.temp)>last(/SmartReader CAP by SNMPv3/sr3.cpu.temp.max)-{$SR.TEMP.MARGIN}'
       name: 'Reader CPU running hot (SNMPv3)'
       priority: WARNING
       dependencies:
         - name: 'SmartReader SNMPv3 agent not answering'
           expression: 'nodata(/SmartReader CAP by SNMPv3/sr3.agent.uptime,5m)=1'
-    - uuid: 111b321a98c14c91aa78770abc842f05
+    - uuid: d47c7ba1d7244237ad683d1c6c824e75
       expression: 'max(/SmartReader CAP by SNMPv3/sr3.wrong.digests,5m)>0 or max(/SmartReader CAP by SNMPv3/sr3.decryption.errors,5m)>0'
       name: 'SNMPv3 requests with a wrong key against SmartReader'
       priority: WARNING
