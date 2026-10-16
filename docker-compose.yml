@@ -63,7 +63,7 @@ services:
     restart: unless-stopped
 
   # Optional (docker compose --profile snmpv3-sim up -d): Net-SNMP's agent answering for SmartReader's
-  # experimental SNMPv3 objects with synthetic values. See docs/smartreader-snmpv3.md.
+  # SNMPv3 objects with synthetic values. See docs/smartreader-snmpv3.md.
   smartreader-snmpv3-sim:
     profiles: ["snmpv3-sim"]
     build: ./snmpv3-sim

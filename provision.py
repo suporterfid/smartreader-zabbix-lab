@@ -15,7 +15,7 @@ TOKEN = None
 T_SNMP = "Impinj R700 by SNMP"
 T_CAP = "SmartReader CAP by HTTP"
 T_REST = "Impinj R700 REST API"
-T_SR3 = "SmartReader CAP by SNMPv3"  # shown as "... (experimental)"
+T_SR3 = "SmartReader CAP by SNMPv3"
 HOST = "r700-bench"
 SIM_HOST = "smartreader-snmpv3-sim"
 SIM_IP = "172.31.67.20"  # pinned in docker-compose.yml
@@ -24,7 +24,7 @@ SIM_IP = "172.31.67.20"  # pinned in docker-compose.yml
 # the source address is kept (Docker Engine on Linux, or a native proxy).
 TRAP_SOURCE_IP = ENV.get("TRAP_SOURCE_IP", "172.31.67.1")
 
-# SmartReader's own SNMPv3 agent (experimental, off unless .env turns it on): see docs/smartreader-snmpv3.md.
+# SmartReader's own SNMPv3 agent (off unless .env turns it on): see docs/smartreader-snmpv3.md.
 SR3_ON_READER = ENV.get("SR_SNMPV3_ENABLED", "0") == "1"
 SR3_SIMULATOR = ENV.get("SR_SNMPV3_SIMULATOR", "0") == "1"
 SR3_PORT = ENV.get("SR_SNMPV3_PORT", "1161")
@@ -411,28 +411,53 @@ def build_rest_template(groupid):
     return tid
 
 
-# ---------------------------------------------------------------- SmartReader CAP by SNMPv3 (experimental)
+# ---------------------------------------------------------------- SmartReader CAP by SNMPv3
+
+# The informs of SmartReader's agent (SMARTREADER-MIB, smartReaderNotifications): number, name, severity, text.
+# One trap item and one trigger each; the others reach the catch-all item below. snmptrapd prints an OID by name or
+# by number, so the key accepts both.
+SR3_NOTIFICATIONS = (
+    (1, "capStarted", INFO, "SmartReader CAP started (inform)"),
+    (3, "mqttDisconnected", WARNING, "SmartReader CAP lost its MQTT broker (inform)"),
+    (4, "mqttConnectFailed", WARNING, "SmartReader CAP cannot connect to its MQTT broker (inform)"),
+    (7, "readerLifecycleFault", HIGH, "SmartReader CAP cannot work with the reader (inform)"),
+    (9, "readerRestUnhealthy", HIGH, "Reader REST API unhealthy (inform)"),
+    (11, "networkLost", HIGH, "Reader lost its network (inform)"),
+    (13, "thresholdCrossed", WARNING, "Reader CPU, memory, disk or temperature over its limit (inform)"),
+    (15, "certificateExpiring", WARNING, "SmartReader certificate expires in under 30 days (inform)"),
+    (16, "certificateExpired", AVERAGE, "SmartReader certificate expired (inform)"),
+    (17, "antennaStatusChanged", WARNING, "Antenna operational status changed (inform)"),
+    (18, "bootReasonChanged", INFO, "Reader booted again (inform)"),
+)
+
+
+def sr3_trap_key(number, name):
+    return f'snmptrap["(netSnmpPlaypen\\.7\\.0\\.|8072\\.9999\\.9999\\.7\\.0\\.){number}(\\D|$)|{name}"]'
+
 
 def build_sr3_template(groupid):
     """SmartReader's own SNMPv3 agent: CAP health without HTTP credentials in Zabbix.
 
-    The OIDs follow the experimental agent of the SmartReader SNMPv3 test build and sit under the provisional
-    root in {$SR.SNMP.ROOT}. When the final arc is allocated, only that macro changes.
+    The OIDs follow SMARTREADER-MIB (docs/Snmp/MIB-REFERENCE.md in the SmartReader repository) and sit under the
+    root in {$SR.SNMP.ROOT}. The root is provisional until Impinj allocates the arc; then only that macro and the
+    trap keys change.
     """
-    tid = template(T_SR3, groupid, "EXPERIMENTAL. SmartReader CAP health from the CAP's own SNMPv3 agent "
-                   "(authPriv, read-only): CPU, memory, disk, temperatures, uptimes, MQTT, agent counters and "
-                   "SNMPv3 informs. Needs a SmartReader CAP that ships the agent; the object layout and root "
-                   "are provisional. The interface is SNMPv3 on UDP 1161.", macros=[
+    tid = template(T_SR3, groupid, "SmartReader CAP health from the CAP's own SNMPv3 agent (authPriv, read-only): "
+                   "CPU, memory, disk, temperatures, uptimes, MQTT, the antennas and components (low-level "
+                   "discovery), the agent's counters and SmartReader's SNMPv3 informs. The CAP admin password and "
+                   "the reader's root password are not needed. The interface is SNMPv3 on UDP 1161. The OIDs sit "
+                   "under a provisional root until Impinj allocates the arc.", macros=[
                        {"macro": "{$SR.SNMP.ROOT}", "value": SR3_ROOT,
-                        "description": "Root of SmartReader's objects (provisional)"},
+                        "description": "Root of SMARTREADER-MIB (provisional)"},
                        {"macro": "{$SR.DISK.MAX}", "value": "85"},
                        {"macro": "{$SR.PENDING.MAX}", "value": "100"},
                        {"macro": "{$SR.TEMP.MARGIN}", "value": "5"},
-                   ], visible_name=f"{T_SR3} (experimental)")
+                   ])
     updown = updown_map(tid)
     b = Builder(tid)
     T = T_SR3
     root = "{$SR.SNMP.ROOT}"
+    obj = f"{root}.2"  # smartReaderObjects
     t3 = tags(component="smartreader-snmpv3")
 
     # Created disabled: on a host with two SNMP interfaces Zabbix links them to the main (v2c) one and may
@@ -448,29 +473,31 @@ def build_sr3_template(groupid):
     snmp("SNMPv3 engine ID", "sr3.engine.id", "1.3.6.1.6.3.10.2.1.1.0", CHAR, delay="1h")
     snmp("SNMPv3 engine boots", "sr3.engine.boots", "1.3.6.1.6.3.10.2.1.2.0", UINT, delay="5m")
 
-    # Health, as the CAP already collects it (the same sources as /metrics).
+    # Health, as the CAP already collects it (the same sources as /metrics): srSystem.
     health = (
-        ("CAP process CPU", "sr3.cpu", 1, FLOAT, "%", [step(MULT, "0.01")]),
-        ("CAP process memory", "sr3.memory", 2, FLOAT, "B", [step(MULT, "1048576")]),
-        ("CAP file system used", "sr3.disk.pused", 3, FLOAT, "%", [step(MULT, "0.01")]),
-        ("Reader OS uptime", "sr3.os.uptime", 4, FLOAT, "uptime", []),
-        ("CAP application uptime", "sr3.app.uptime", 5, FLOAT, "uptime", []),
-        ("CPU temperature", "sr3.cpu.temp", 6, FLOAT, "°C", [step(MULT, "0.1")]),
-        ("CPU temperature limit", "sr3.cpu.temp.max", 7, FLOAT, "°C", [step(MULT, "0.1")]),
-        ("CPU temperature peak", "sr3.cpu.temp.peak", 8, FLOAT, "°C", [step(MULT, "0.1")]),
-        ("CAP connected to MQTT broker", "sr3.mqtt.connected", 9, UINT, "", []),
-        ("CAP MQTT messages pending", "sr3.mqtt.pending", 10, UINT, "", []),
-        ("CAP resident memory", "sr3.process.rss", 20, UINT, "B", []),
-        # Milliseconds of CPU per second, divided by 10, is percent of one core.
-        ("CAP CPU, % of one core", "sr3.process.cpu", 21, FLOAT, "%", [step(CHANGE_SEC), step(MULT, "0.1")]),
-        ("CAP managed heap", "sr3.process.heap", 22, UINT, "B", []),
-        ("CAP threads", "sr3.process.threads", 23, UINT, "", []),
+        ("CAP process CPU", "sr3.cpu", "1.4", FLOAT, "%", [step(MULT, "0.01")]),
+        ("CAP process memory", "sr3.memory", "1.5", FLOAT, "B", [step(MULT, "1048576")]),
+        ("CAP file system used", "sr3.disk.pused", "1.6", FLOAT, "%", [step(MULT, "0.01")]),
+        ("Reader OS uptime", "sr3.os.uptime", "1.3", FLOAT, "uptime", []),
+        ("CAP application uptime", "sr3.app.uptime", "1.2", FLOAT, "uptime", []),
+        ("CPU temperature", "sr3.cpu.temp", "1.7", FLOAT, "°C", [step(MULT, "0.1")]),
+        ("CPU temperature limit", "sr3.cpu.temp.max", "1.8", FLOAT, "°C", [step(MULT, "0.1")]),
+        ("CPU temperature peak", "sr3.cpu.temp.peak", "1.9", FLOAT, "°C", [step(MULT, "0.1")]),
+        # srOutputs: TruthValue, 1 true and 2 false; the trigger and the Up/Down map want 1 and 0.
+        ("CAP connected to MQTT broker", "sr3.mqtt.connected", "3.1", UINT, "",
+         [step(JAVASCRIPT, "return value == 1 ? 1 : 0;")]),
+        ("CAP MQTT messages pending", "sr3.mqtt.pending", "3.2", UINT, "", []),
     )
     for name, key, index, vtype, units, pre in health:
-        snmp(name, key, f"{root}.2.{index}.0", vtype, units=units, preprocessing=pre)
+        snmp(name, key, f"{obj}.{index}.0", vtype, units=units, preprocessing=pre)
     call("item.update", {"itemid": b.items["sr3.mqtt.connected"], "valuemapid": updown})
+    snmp("CAP version", "sr3.cap.version", f"{obj}.1.1.0", CHAR, delay="1h")
+    snmp("Reader firmware version", "sr3.reader.firmware", f"{obj}.2.6.0", CHAR, delay="1h")
+    snmp("Reader model", "sr3.reader.model", f"{obj}.2.7.0", CHAR, delay="1h")
+    snmp("Reader serial number", "sr3.reader.serial", f"{obj}.2.8.0", CHAR, delay="1h")
+    snmp("Reader MAC address", "sr3.reader.mac", f"{obj}.2.9.0", CHAR, delay="1h")
 
-    # The agent's own counters, as rates.
+    # The agent's own counters (srAgent), as rates.
     counters = (
         ("SNMPv3 requests", "sr3.requests", 1),
         ("SNMPv3 unknown user names", "sr3.unknown.users", 4),
@@ -478,13 +505,17 @@ def build_sr3_template(groupid):
         ("SNMPv3 decryption errors", "sr3.decryption.errors", 7),
         ("SNMPv3 requests outside the time window", "sr3.time.window", 8),
         ("SNMPv3 requests dropped by the rate limit", "sr3.rate.limited", 11),
-        ("SNMPv3 SET requests refused", "sr3.set.refused", 12),
+        ("SNMPv3 SET requests refused", "sr3.set.refused", 13),
     )
     for name, key, index in counters:
-        snmp(f"{name} per second", key, f"{root}.3.{index}.0", FLOAT, units="rps",
+        snmp(f"{name} per second", key, f"{obj}.10.{index}.0", FLOAT, units="rps",
              preprocessing=[step(CHANGE_SEC)])
 
-    # RFID statistics: what the CAP's status collector reads with RShell `show rfid stat`, refreshed every 60 s.
+    # Informs the CAP sent, and the ones it had to drop because a target was down (srOutputs).
+    snmp("SmartReader informs failed", "sr3.informs.failed", f"{obj}.3.14.0", UINT)
+    snmp("SmartReader informs dropped", "sr3.informs.dropped", f"{obj}.3.15.0", UINT)
+
+    # RFID statistics: what the CAP's status collector reads with RShell `show rfid stat`.
     rfid_status = call("valuemap.create", {"hostid": tid, "name": "SmartReader RFID status", "mappings": [
         {"value": "1", "newvalue": "enabled"}, {"value": "2", "newvalue": "disabled"},
         {"value": "3", "newvalue": "other"}]})["valuemapids"][0]
@@ -494,26 +525,31 @@ def build_sr3_template(groupid):
         {"value": "0", "newvalue": "not collected yet"}, {"value": "1", "newvalue": "ok"},
         {"value": "2", "newvalue": "timeout"}, {"value": "3", "newvalue": "paused: the reader rejects the CAP's credentials"},
         {"value": "4", "newvalue": "error"}]})["valuemapids"][0]
-    snmp("Reader administrative status", "sr3.reader.admin", f"{root}.5.2.1.0", UINT, valuemapid=rfid_status)
-    snmp("Reader operational status", "sr3.reader.oper", f"{root}.5.2.2.0", UINT, valuemapid=rfid_status)
-    snmp("RFID statistics since last reset", "sr3.rfid.reset", f"{root}.5.2.3.0", FLOAT, units="uptime")
-    snmp("RFID statistics age", "sr3.rfid.age", f"{root}.5.3.1.0", FLOAT, units="s")
-    snmp("RFID statistics collection", "sr3.rfid.collection", f"{root}.5.3.2.0", UINT, valuemapid=collection)
+    component_state = call("valuemap.create", {"hostid": tid, "name": "SmartReader component state", "mappings": [
+        {"value": "1", "newvalue": "OK"}, {"value": "2", "newvalue": "Warning"}, {"value": "3", "newvalue": "Error"},
+        {"value": "4", "newvalue": "Off"}, {"value": "5", "newvalue": "Amber"}]})["valuemapids"][0]
+    snmp("Reader administrative status", "sr3.reader.admin", f"{obj}.2.20.0", UINT, valuemapid=rfid_status)
+    snmp("Reader operational status", "sr3.reader.oper", f"{obj}.2.21.0", UINT, valuemapid=rfid_status)
+    snmp("RFID statistics since last reset", "sr3.rfid.reset", f"{obj}.2.22.0", FLOAT, units="uptime")
+    # srCollectorGroupTable row 1 is the RfidStatistics group.
+    snmp("RFID statistics age", "sr3.rfid.age", f"{obj}.9.2.1.4.1", FLOAT, units="s")
+    snmp("RFID statistics collection", "sr3.rfid.collection", f"{obj}.9.2.1.3.1", UINT, valuemapid=collection)
 
-    # Antenna table: one row per port, `show rfid stat` figures plus SmartReader's own antenna settings.
+    # Antenna table (srAntennaTable): one row per port, `show rfid stat` figures plus SmartReader's own settings.
     walk_key = "sr3.antennas.walk"
-    snmp("Antenna table (walk)", walk_key, f"walk[{root}.5.1.1]", TEXT, history="1h")
+    antennas = f"{obj}.5.1.1"
+    snmp("Antenna table (walk)", walk_key, f"walk[{antennas}]", TEXT, history="1h")
     rule = call("discoveryrule.create", {
         "hostid": tid, "name": "SmartReader antenna discovery", "key_": "sr3.antenna.discovery", "type": DEPENDENT,
         "master_itemid": b.items[walk_key], "delay": "0", "lifetime": "1d",
-        "preprocessing": [step(WALK_JSON, f"{{#ZONE}}\n{root}.5.1.1.21\n0\n{{#CONFIGURED}}\n{root}.5.1.1.20\n0")],
+        "preprocessing": [step(WALK_JSON, f"{{#ZONE}}\n{antennas}.21\n0\n{{#CONFIGURED}}\n{antennas}.20\n0")],
     })["itemids"][0]
 
     def antenna(name, field, column, vtype, units="", extra=(), **kw):
         params = {"ruleid": rule, "hostid": tid, "name": f"Antenna {{#SNMPINDEX}} ({{#ZONE}}): {name}",
                   "key_": f"sr3.antenna.{field}[{{#SNMPINDEX}}]", "type": DEPENDENT, "delay": "0",
                   "value_type": vtype, "master_itemid": b.items[walk_key], "units": units,
-                  "preprocessing": [step(WALK_VALUE, f"{root}.5.1.1.{column}.{{#SNMPINDEX}}\n0"), *extra],
+                  "preprocessing": [step(WALK_VALUE, f"{antennas}.{column}.{{#SNMPINDEX}}\n0"), *extra],
                   "tags": tags(component="smartreader-antenna", antenna="{#SNMPINDEX}")}
         params.update(kw)
         return call("itemprototype.create", params)["itemids"][0]
@@ -538,9 +574,36 @@ def build_sr3_template(groupid):
     antenna("configured transmit power", "txpower", 22, FLOAT, "dBm", [step(MULT, "0.01")])
     antenna("configured receive sensitivity", "rxsensitivity", 23, FLOAT, "dBm")
 
-    b.item("Trap: SmartReader SNMPv3 notification", SR3_TRAP_KEY, TRAP, LOG, tags=tags(component="traps"))
+    # Component table (srComponentTable): one row per item of the CAP's status overview.
+    components_key = "sr3.components.walk"
+    components = f"{obj}.4.1.1"
+    snmp("Component table (walk)", components_key, f"walk[{components}]", TEXT, history="1h")
+    comp_rule = call("discoveryrule.create", {
+        "hostid": tid, "name": "SmartReader component discovery", "key_": "sr3.component.discovery", "type": DEPENDENT,
+        "master_itemid": b.items[components_key], "delay": "0", "lifetime": "1d",
+        "preprocessing": [step(WALK_JSON, f"{{#KEY}}\n{components}.2\n0\n{{#LABEL}}\n{components}.3\n0")],
+    })["itemids"][0]
 
-    down = trigger("SmartReader SNMPv3 agent not answering", f"nodata(/{T}/sr3.agent.uptime,5m)=1", AVERAGE)
+    def component(name, field, column, vtype, **kw):
+        params = {"ruleid": comp_rule, "hostid": tid, "name": f"CAP component {{#LABEL}}: {name}",
+                  "key_": f"sr3.component.{field}[{{#SNMPINDEX}}]", "type": DEPENDENT, "delay": "0",
+                  "value_type": vtype, "master_itemid": b.items[components_key],
+                  "preprocessing": [step(WALK_VALUE, f"{components}.{column}.{{#SNMPINDEX}}\n0")],
+                  "tags": tags(component="smartreader-component", key="{#KEY}")}
+        params.update(kw)
+        return call("itemprototype.create", params)["itemids"][0]
+
+    component("state", "state", 4, UINT, valuemapid=component_state)
+    component("detail", "detail", 5, CHAR, history="7d", trends="0")
+
+    # Informs, one item each: they are what makes the CAP's own events visible without polling.
+    b.item("Trap: SmartReader SNMPv3 notification (any)", SR3_TRAP_KEY, TRAP, LOG, tags=tags(component="traps"))
+    for number, name, severity, text in SR3_NOTIFICATIONS:
+        b.item(f"Trap: {name}", sr3_trap_key(number, name), TRAP, LOG, tags=tags(component="traps", notification=name))
+
+    down = trigger("SmartReader SNMPv3 agent not answering", f"nodata(/{T}/sr3.agent.uptime,5m)=1", AVERAGE,
+                   comments="The \"CAP is down\" alarm: when SmartReader stops, so does its agent. Keep the ICMP check of the "
+                            "reader template as well.")
     dep = [{"triggerid": down}]
     trigger("CAP lost the MQTT broker (SNMPv3)", f"max(/{T}/sr3.mqtt.connected,5m)=0", HIGH, dependencies=dep)
     trigger("CAP MQTT messages backing up (SNMPv3)", f"min(/{T}/sr3.mqtt.pending,10m)>{{$SR.PENDING.MAX}}",
@@ -553,14 +616,14 @@ def build_sr3_template(groupid):
     trigger("CAP restarted (SNMPv3)", f"last(/{T}/sr3.app.uptime)<600", WARNING, dependencies=dep)
     trigger("SmartReader SNMP engine restarted", f"change(/{T}/sr3.engine.boots)>0", INFO, manual_close=1,
             dependencies=dep)
-    # A wrong key shows up as a wrong digest or, when the privacy key is wrong too, as a decryption error: the
-    # agent of the SmartReader test build decrypts before it checks the digest.
     trigger("SNMPv3 requests with a wrong key against SmartReader",
             f"max(/{T}/sr3.wrong.digests,5m)>0 or max(/{T}/sr3.decryption.errors,5m)>0", WARNING,
             dependencies=dep, comments="Someone is trying the agent with a wrong key; check who can reach UDP 1161.")
+    trigger("SmartReader informs are being dropped", f"change(/{T}/sr3.informs.dropped)>0", WARNING,
+            manual_close=1, comments="An inform target was down long enough for the CAP's queue to fill.")
     trigger("Reader RFID not operational (SNMPv3)", f"last(/{T}/sr3.reader.oper)<>1", HIGH, dependencies=dep)
     trigger("SmartReader RFID statistics older than 5 minutes", f"last(/{T}/sr3.rfid.age)>300", WARNING,
-            dependencies=dep, comments="The CAP collects them every 60 s; see the collection status item for why.")
+            dependencies=dep, comments="The CAP collects them every minute; see the collection status item for why.")
     trigger("SmartReader cannot collect RFID statistics", f'count(/{T}/sr3.rfid.collection,10m,"eq","1")=0',
             WARNING, dependencies=dep)
     call("triggerprototype.create", {
@@ -568,8 +631,15 @@ def build_sr3_template(groupid):
         "expression": f"last(/{T}/sr3.antenna.oper[{{#SNMPINDEX}}])<>1"
                       f" and last(/{T}/sr3.antenna.enabled[{{#SNMPINDEX}}])=1",
         "priority": AVERAGE, "opdata": "{ITEM.LASTVALUE1}"})
+    call("triggerprototype.create", {
+        "description": "CAP component {#LABEL} is in error",
+        "expression": f"last(/{T}/sr3.component.state[{{#SNMPINDEX}}])=3",
+        "priority": AVERAGE, "opdata": "{ITEM.LASTVALUE1}", "dependencies": []})
     trigger("SmartReader SNMPv3 notification received", f"nodata(/{T}/{SR3_TRAP_KEY},15m)=0", INFO,
             manual_close=1, comments="Raised for 15 minutes after an inform arrives; close it manually once handled.")
+    for number, name, severity, text in SR3_NOTIFICATIONS:
+        trigger(text, f"nodata(/{T}/{sr3_trap_key(number, name)},15m)=0", severity, manual_close=1,
+                comments=f"Raised for 15 minutes after the inform {name} arrives; close it manually once handled.")
     return tid
 
 

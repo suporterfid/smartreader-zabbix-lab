@@ -38,13 +38,13 @@ it out, and every item in it has collected data from a real reader (firmware 10.
 | Reader | SNMP traps | Unexpected restart, authentication failure, planned shutdown, SNMP agent restart, anything else via a fallback item |
 | SmartReader CAP | HTTPS 8443 | `/metrics` (MQTT connection and backlog, CAP and OS uptime, memory, disk, CPU temperature, `eth0` traffic), `/api/status/overview` (each dashboard component, discovered), `/api/getstatus` (inventory running or stopped), `/api/reader-rest-health` |
 | Reader | REST API | Current CPU and memory utilization, temperature, uptime, firmware version, installed CAP image |
-| SmartReader CAP | SNMPv3, **experimental and opt-in** | CAP health from SmartReader's own SNMPv3 agent (authPriv, UDP 1161), the reader's RFID statistics with one set of items per antenna port (low-level discovery), and its SNMPv3 informs. No released CAP has the agent yet; a simulator stands in. See [docs/smartreader-snmpv3.md](docs/smartreader-snmpv3.md) |
+| SmartReader CAP | SNMPv3, **opt-in** | CAP health from SmartReader's own SNMPv3 agent (authPriv, UDP 1161), the reader's RFID statistics with one set of items per antenna port (low-level discovery), and its SNMPv3 informs. The layout is final, the OID root is provisional; no reader has run it yet, so a simulator stands in. See [docs/smartreader-snmpv3.md](docs/smartreader-snmpv3.md) |
 
 Three templates are created in the *Templates/SmartReader* group: **Impinj R700 by SNMP**,
 **SmartReader CAP by HTTP** and **Impinj R700 REST API**. With one antenna attached, the host has about
 80 items and 20 triggers, plus a dashboard named **R700 bench lab**. A fourth template,
-**SmartReader CAP by SNMPv3 (experimental)**, is only created when `.env` turns on
-[SNMPv3 from SmartReader](#snmpv3-from-smartreader-experimental).
+**SmartReader CAP by SNMPv3**, is only created when `.env` turns on
+[SNMPv3 from SmartReader](#snmpv3-from-smartreader).
 
 ## Dashboard
 
@@ -109,11 +109,11 @@ snmpget -v2c -c wrong-community <reader> 1.3.6.1.2.1.1.5.0
 | `reader_snmp.py` | `enable`, `revert` or `show` the reader's SNMP settings through RShell |
 | `status.py` | What Zabbix is collecting: unsupported items, latest values, traps, open problems, inventory |
 | `probe.py` | Read-only look at the reader and the CAP without Zabbix |
-| `smartreader_snmpv3.py` | Experimental SNMPv3 helpers: `credentials`, `traps`, `check`, `inform` |
+| `smartreader_snmpv3.py` | SNMPv3 helpers: `credentials`, `traps`, `check`, `inform` |
 | `snmpv3-sim/` | Simulator of SmartReader's SNMPv3 agent (Net-SNMP), started with the `snmpv3-sim` compose profile |
 | `snmptrapd/` | Trap receiver's persistent configuration; holds the generated SNMPv3 user, git-ignored |
-| `docs/smartreader-snmpv3.md` | Tutorial for the experimental SNMPv3 part |
-| `templates/zbx_smartreader_cap_snmpv3.yaml` | The experimental SNMPv3 template, exported for import into your own Zabbix 7.0 |
+| `docs/smartreader-snmpv3.md` | Tutorial for the SNMPv3 part |
+| `templates/zbx_smartreader_cap_snmpv3.yaml` | The SNMPv3 template, exported for import into your own Zabbix 7.0 |
 | `docs/reader-setup.md` | Step-by-step tutorial for preparing a reader |
 | `docs/images/` | Dashboard screenshots used in this README |
 | `docs/snmpwalk-r700-fw10.4.0.txt` | Sample walk of a reader, serial number and host name removed |
@@ -156,7 +156,7 @@ Checked on an R700 with firmware 10.4.0 and SmartReader CAP 4.0.1.109:
   - The CPU metric is a since-boot average, not current load. Later releases report the last 10 s.
   - The min/max gauges are constants.
 
-## SNMPv3 from SmartReader (experimental)
+## SNMPv3 from SmartReader
 
 SmartReader is getting its own SNMPv3 agent, inside the CAP on UDP 1161. It offers authPriv (SHA-2 and AES),
 answers read-only, and sends SNMPv3 informs. Besides the CAP's health it serves the reader's `show rfid stat`
@@ -197,7 +197,7 @@ docker compose exec zabbix-snmptraps tail /var/lib/zabbix/snmptraps/snmptraps.lo
 - `.env` holds the reader's root password and the CAP login. It is git-ignored; keep it that way.
   Inside Zabbix the passwords are stored as secret macros.
 - SNMP v2c sends its community in clear text. Use the lab on a network you trust.
-- The experimental SNMPv3 part keeps its passphrases in `.env` and in `snmptrapd/snmptrapd_custom.conf`, both
+- The SNMPv3 part keeps its passphrases in `.env` and in `snmptrapd/snmptrapd_custom.conf`, both
   git-ignored, and in Zabbix as secret macros.
 - Change the Zabbix `Admin` password if anyone else can reach port 8080. The compose file binds the web
   UI to `127.0.0.1` for that reason.
